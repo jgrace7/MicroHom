@@ -1,0 +1,44 @@
+# Simulation Outputs
+RESULTS_*/
+*.log
+*.inp
+*.e
+*.csv
+*.xlsx
+
+# Raw/Extracted Images
+MicrostructureImages/
+*.tiff
+*.png
+Img*/
+
+# Python/System Caches
+__pycache__/
+*.pyc
+.DS_Store
+oof2-*.py
+.jitcache/
+
+# My Config Files
+*.json
+
+# My Shell Scripts/SLURM
+run_mesh_convg.sh
+run_ud_mesh_convg.sh
+submit.sh
+run_study.slurm
+
+# My App installations
+moose/
+oof2_dir/
+oof2_old/
+
+# Singularity Files
+*.sif
+
+# Old Files
+*_old.*
+
+# Example Exception
+!example/
+!example/**

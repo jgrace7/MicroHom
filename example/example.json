@@ -1,0 +1,37 @@
+{
+    "cluster": false,
+    "img_dir": "./example",
+    "binary": true,
+    "elements_per_pixel": 0.5,
+    "res": 1,
+    "cpus": 4,
+    "edge1": 128,
+    "edge2": 0,
+    "img": 1,
+    "subimg": 1,
+    "BC": "disp",
+    "materials": {
+        "white": {
+            "model": "transverse",
+            "E_L": 200,
+            "E_T": 50,
+            "nu_LT": 0.25,
+            "nu_TT": 0.20,
+            "G_LT": 25,
+            "alpha_L": -0.5e-6,
+            "alpha_T": 10e-6
+        },
+        "grey": {
+            "model": "iso",
+            "E": 5,
+            "nu": 0.35,
+            "alpha": 50e-6
+        },
+        "black": {
+            "model": "iso",
+            "E": 1e-9,
+            "nu": 0.0,
+            "alpha": 0.0
+        }
+    }
+}

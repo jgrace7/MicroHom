@@ -1,0 +1,60 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%labels
+    Maintainer MOOSE Solid Mechanics Build
+    Description Portable Singularity image for MOOSE Solid Mechanics
+
+%environment
+    export PATH=/opt/miniforge3/bin:$PATH
+    export PATH=/opt/miniforge3/envs/moose/bin:$PATH
+    export MOOSE_DIR=/opt/projects/moose
+    export PATH=/opt/projects/moose/modules/solid_mechanics:$PATH
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+
+    # Install prerequisites
+    apt-get update && apt-get install -y --no-install-recommends \
+        wget curl git ca-certificates build-essential file \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install Miniforge
+    wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh -O /tmp/miniforge.sh
+    bash /tmp/miniforge.sh -b -p /opt/miniforge3
+    rm /tmp/miniforge.sh
+
+    export PATH=/opt/miniforge3/bin:$PATH
+    
+    # Configure Conda and create the pinned environment
+    conda config --add channels https://conda.software.inl.gov/public
+    conda config --add channels conda-forge
+    conda create -y -n moose moose-dev=2026.10.19=mpich
+
+    # Force bash for the activation, clone, and build steps
+    /bin/bash -c "
+        source /opt/miniforge3/etc/profile.d/conda.sh
+        conda activate moose
+        
+        mkdir -p /opt/projects
+        cd /opt/projects
+        
+        # Clone MOOSE
+        git clone https://github.com/idaholab/moose.git
+        cd moose
+        
+        # NOTE: Replace this with your actual commit hash from your local MOOSE repo
+        git checkout 96fe103c58957faac4764165f8a5b7d9f86829f5
+        
+        git submodule update --init --recursive
+        
+        # Compile Solid Mechanics
+        cd modules/solid_mechanics
+        make -j \$(nproc)
+    "
+
+    conda clean -a -y
+    chmod -R 777 /opt/projects/moose
+
+%runscript
+    /bin/bash -c "source /opt/miniforge3/etc/profile.d/conda.sh && conda activate moose && exec /opt/projects/moose/modules/solid_mechanics/solid_mechanics-opt \"\$@\""
