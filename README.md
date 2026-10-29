@@ -153,14 +153,14 @@ Use the bash script wrapper (`run.sh`) to execute the pipeline. You can chain mu
 
 ```bash
 # Run the entire pipeline sequentially (local mode, cluster: false)
-./run.sh --img --oof --mesh --sim --post --char
+./run.sh --img --oof --mesh --sim --post --char --config config.json
 
 # Run only the image extraction and meshing steps with a custom config
-./run.sh --img --oof --config custom_config.json
+./run.sh --img --oof --config config.json
 
 # Cluster mode (cluster: true): run the OOF2 step on its own, then the rest
-./run.sh --img --oof
-./run.sh --mesh --sim --post --char
+./run.sh --img --oof --config config.json
+./run.sh --mesh --sim --post --char --config config.json
 ```
 
 ## Troubleshooting
