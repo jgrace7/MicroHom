@@ -6,7 +6,7 @@ class InplaneFile:
     FILE_DIR = "ModelFiles/Model_files_IN"
     INPUT = 'input.i'
 
-    def __init__(self, nodes, n_map, elements, e_map, e_types, elsets, nsets, BC):
+    def __init__(self, nodes, n_map, elements, e_map, e_types, elsets, nsets, BC, materials=None):
         self.ns = nodes
         self.elms = elements
         self.elsets = elsets
@@ -15,6 +15,7 @@ class InplaneFile:
         self.e_types = e_types
         self.n_map = n_map
         self.BC = BC
+        self.materials = materials or {}
 
     # make sure there is a place to put the input file.
     def make_SVE_dir(self, dir, i):
@@ -94,10 +95,9 @@ class InplaneFile:
         import json
         
         # Load properties from config
-        with open("config.json", "r") as f:
-            config = json.load(f)
-        
-        json_props = config.get("materials", {})
+        json_props = self.materials
+        if not json_props:
+            raise ValueError("No 'materials' were passed to the input writer (check config.json).")
 
         def iso_C(E, nu):
             return {'model': 'iso', 'E': E, 'nu': nu}
@@ -356,7 +356,7 @@ class OutplaneShearFile:
     FILE_DIR = "ModelFiles/Model_files_OUT_SHEAR"
     INPUT = 'input.i'
 
-    def __init__(self, nodes, n_map, elements, e_map, e_types, elsets, nsets, BC):
+    def __init__(self, nodes, n_map, elements, e_map, e_types, elsets, nsets, BC, materials=None):
         self.ns = nodes
         self.elms = elements
         self.elsets = elsets
@@ -365,6 +365,7 @@ class OutplaneShearFile:
         self.e_types = e_types
         self.n_map = n_map
         self.BC = BC
+        self.materials = materials or {}
 
     def make_SVE_dir(self, dir, i):
         sve_dir = os.path.join(dir, f"SVE{i}")
@@ -442,10 +443,9 @@ class OutplaneShearFile:
         import json
         
         # Load properties from config
-        with open("config.json", "r") as f:
-            config = json.load(f)
-        
-        json_props = config.get("materials", {})
+        json_props = self.materials
+        if not json_props:
+            raise ValueError("No 'materials' were passed to the input writer (check config.json).")
 
         def iso_G(E, nu):
             G = E / (2 * (1 + nu))
@@ -625,7 +625,7 @@ class OutofPlaneNormalFile:
     FILE_DIR = "ModelFiles/Model_files_OUT_NORM"
     INPUT = 'input.i'
 
-    def __init__(self, nodes, n_map, elements, e_map, e_types, elsets, nsets, BC):
+    def __init__(self, nodes, n_map, elements, e_map, e_types, elsets, nsets, BC, materials=None):
         self.ns = nodes
         self.elms = elements
         self.elsets = elsets
@@ -634,6 +634,7 @@ class OutofPlaneNormalFile:
         self.e_types = e_types
         self.n_map = n_map
         self.BC = BC
+        self.materials = materials or {}
 
     def make_SVE_dir(self, dir, i):
         sve_dir = os.path.join(dir, f"SVE{i}")
@@ -728,10 +729,9 @@ class OutofPlaneNormalFile:
         import os
 
         # Load properties from config
-        with open("config.json", "r") as f:
-            config = json.load(f)
-        
-        json_props = config.get("materials", {})
+        json_props = self.materials
+        if not json_props:
+            raise ValueError("No 'materials' were passed to the input writer (check config.json).")
 
         def iso_C(E, nu):
             return {'model': 'iso', 'E': E, 'nu': nu}
@@ -835,11 +835,12 @@ class OutofPlaneNormalFile:
             temp = temp.replace("{{BLOCKS}}", ' '.join(blocks))
             out += temp + "\n"
 
-        label = {
+        label_map = {
             "grey": "Matrix",
             "white": "Fiber",
             "black": "Inclusion"
-        }.get(phase.lower(), phase.capitalize())
+        }
+        label: str = label_map.get(phase.lower()) or phase.capitalize()
         with open(os.path.join(self.FILE_DIR, "PhaseSummary.i")) as ps:
             ps_tmp = ps.read()
         ps_tmp = ps_tmp.replace("{{LABEL}}", label).replace("{{PHASE}}", phase)

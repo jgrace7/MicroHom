@@ -42,7 +42,7 @@ class OOF_Microstructure:
         with open(inp_path, 'w') as f:
             f.write(text)
 
-    def Create_From_ImageFile(self, res, I, i, elements_per_pixel=1.0):
+    def Create_From_ImageFile(self, res, I, i, elements_per_pixel=1.0, pixel_size_um=1.0):
         with open(self.log_file, 'a') as log_fh:
             with contextlib.redirect_stdout(log_fh), contextlib.redirect_stderr(log_fh):
                 try:
@@ -77,7 +77,7 @@ class OOF_Microstructure:
 
                     width, height = img.size
 
-                    pixel_size_mm = 1/1937 # from scale bar on img
+                    pixel_size_mm = pixel_size_um / 1000 # convert from um to mm
                     #pixel_size_mm = 0.001 # for UD
 
                     width_physical = width * pixel_size_mm
@@ -140,19 +140,6 @@ class OOF_Microstructure:
                             OOF.Material.Assign(material=phase, microstructure='micro', pixels=phase)
                         else:
                             self.log(f"Skipping material assignment for {phase} (no pixels found)", log_fh)
-
-                    #l_ch = 0.0017746913580246912 # from calculation
-                    E = 4.13 # Young's modulus (GPa), use E_T for transverse isotropic materials.
-                    f_t = 65.2 # Tensile strength (MPa)
-                    G_f = 0.18 # Fracture energy (kJ/m^2), also presented as G_c (critical energy release rate)
-                    l_ch = ((E*G_f)/f_t**2)*1000 # Irwin characteristic length (mm)
-                    b = (2/np.pi)*l_ch # regularization length scale for linear softening law (a1 = 2 from Wu 2017)
-                    # characteristic length h/3, h/5
-                    h_max = b/3 # max mesh refinement
-                    h_min = b/5 # min mesh refinement
-
-
-                    print('min and max sacle', h_min, h_max)
 
                     x_els = max(1, int(round(width * elements_per_pixel)))
                     y_els = max(1, int(round(height * elements_per_pixel)))

@@ -1,19 +1,19 @@
 import os
 import numpy as np
-from .FilerReader import AbaqusMesh
+from .FileReader import AbaqusMesh
 from .WriteMooseInput import InplaneFile, OutplaneShearFile, OutofPlaneNormalFile
 
-def process_regions(nodes, n_map, elements, e_map, e_types, elsets, nsets, BC, filedir, solver):
+def process_regions(nodes, n_map, elements, e_map, e_types, elsets, nsets, BC, filedir, solver, materials):
     output_dir = filedir
     if solver == 'linear':
-        inFile = InplaneFile(nodes, n_map, elements, e_map, e_types, elsets, nsets, BC)
+        inFile = InplaneFile(nodes, n_map, elements, e_map, e_types, elsets, nsets, BC, materials)
         inFile.create_files(output_dir, BC)
-        outFile = OutplaneShearFile(nodes, n_map, elements, e_map, e_types, elsets, nsets, BC)
+        outFile = OutplaneShearFile(nodes, n_map, elements, e_map, e_types, elsets, nsets, BC, materials)
         outFile.create_files(output_dir, BC)
-        outFile = OutofPlaneNormalFile(nodes, n_map, elements, e_map, e_types, elsets, nsets, BC)
+        outFile = OutofPlaneNormalFile(nodes, n_map, elements, e_map, e_types, elsets, nsets, BC, materials)
         outFile.create_files(output_dir, BC)
 
-def applyBCs(filedir, homo_name, solver, res, BC, i, j):
+def applyBCs(filedir, homo_name, solver, res, BC, i, j, materials):
 
     outputdir = os.path.join(os.getcwd(), homo_name, f"Res{res}x{res}", f"Img{i}", f"SubImg{j}") 
     reader = AbaqusMesh(filedir)
@@ -29,5 +29,5 @@ def applyBCs(filedir, homo_name, solver, res, BC, i, j):
         nodes, n_map, 
         elements, e_map, e_types, 
         elsets, nsets, 
-        BC, outputdir, solver
+        BC, outputdir, solver, materials
     )

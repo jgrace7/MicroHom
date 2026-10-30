@@ -1,6 +1,7 @@
   [./G_{{PHASE}}]
-    type = GenericConstantMaterial
+    type = AnisoHeatConductionMaterial
     block = {{BLOCK}}
-    prop_names = 'thermal_conductivity'
-    prop_values = {{G}}
+    thermal_conductivity = '{{G}} 0.0 0.0 0.0 {{G}} 0.0 0.0 0.0 0.0'
+    specific_heat = 1.0
+    temperature = u_z
   [../]

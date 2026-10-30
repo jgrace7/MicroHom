@@ -363,8 +363,9 @@ class Post_Process_Thermal:
 
 
 class Post_Process_Sigma:
-    def __init__(self, project_dir, homo_name, res, I, J, LCs, BC):
+    def __init__(self, project_dir, homo_name, res, I, J, LCs, BC, pixel_size_um):
         self.project_dir = project_dir
+        self.pixel_size_um = pixel_size_um
         self.homo_name = homo_name
         self.LCs = LCs 
         self.res = res
@@ -467,8 +468,7 @@ class Post_Process_Sigma:
                     val_45 = 0.5 * (G[0, 1] + G[1, 0])
                     C_full[3, 4] = C_full[4, 3] = val_45
 
-                mmPP = 1/0.973
-                phys_width, phys_height = self.get_physical_dimensions(i, j, mmPP)
+                phys_width, phys_height = self.get_physical_dimensions(i, j, self.pixel_size_um)
 
                 extra_vars = [
                     thermal_results["C33_star"],

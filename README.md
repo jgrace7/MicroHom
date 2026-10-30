@@ -1,42 +1,78 @@
 # MicroHom: Image-Based Generalized Plane Strain Microstructure Homogenization
 
-An automated computational pipeline for extracting Statistical Volume Elements (SVEs) from microstructure imagery, generating finite element meshes, and performing thermo-mechanical homogenization.
+MicroHom turns a 2D microstructure image into the full 3D homogenized thermo-elastic
+response of the material it represents. Images are segmented into phases, meshed with
+[OOF2](https://github.com/usnistgov/OOF2), and analyzed with
+[MOOSE](https://mooseframework.inl.gov/) finite elements under generalized plane strain
+(GPS) boundary conditions. The output is the apparent 3D stiffness matrix and the effective
+coefficients of thermal expansion (CTE). Supported microstructures are two-phase or porous
+two-phase materials. Voids are represented by a near-zero-stiffness phase
+(see `example/example.json`).
 
-This workflow utilizes Generalized Plane Strain (GPS) boundary conditions to compute apparent elastic properties and Coefficient of Thermal Expansion (CTE) from two-phase or multiphase microstructures.
+## Method Overview
+A 2D image is analyzed with a set of GPS load cases, and the homogenized
+3D properties are recovered from a 2D model:
+
+- **In-plane stiffness** comes from the in-plane GPS load cases (displacement, traction, or
+  mixed boundary conditions, selected with `BC`).
+- **Out-of-plane normal stiffness** for a two-phase or porous two-phase microstructure is computed from a closed-form expression using the results of
+  the in-plane cases, so it needs no separate simulation.
+- **Out-of-plane shear stiffness** is computed with a surrogate heat-conduction formulation,
+  using the analogy between anti-plane shear and steady-state heat conduction.
+- **Effective CTE** is computed from an eigenstrain (thermal strain) load case.
+
+Each material phase can be isotropic or transversely isotropic (see `materials` in the
+configuration section). Large images can be divided into an n×n grid of sub-images (`res`)
+to study statistical volume element (SVE) size effects.
 
 ## Architecture & Workflow
 The pipeline operates through modular, concurrent execution of the following stages:
 1.  **Image Processing (`--img`):** Extracts domain sub-images, quantizes phases, and characterizes morphology using `scikit-image` and `Pillow`.
-2.  **Meshing (`--oof`):** Drives a **stock, unmodified OOF2 install** through its Python API using the scripts in `main/` (`OOF_Env.py`, `run_oof2.py`, `generate_mesh_from_image.py`) to generate representative quad-meshes from extracted SVEs.
-3.  **Boundary Conditions (`--mesh`):** Applies GPS and CTE boundary conditions to the generated meshes.
-4.  **Simulation (`--sim`):** Executes high-performance finite element analysis using either a containerized or locally compiled MOOSE environment.
+2.  **OOF2 Meshing (`--oof`):** Drives a **stock, unmodified OOF2 install** through its Python API using the scripts in `main/` (`OOF_Env.py`, `run_oof2.py`, `generate_mesh_from_image.py`) to generate representative quad-meshes from extracted SVEs.
+3.  **MOOSE Input File Generation (`--mesh`):** Applies GPS and CTE boundary conditions to the generated meshes.
+4.  **MOOSE Simulation (`--sim`):** Executes high-performance finite element analysis using either a containerized or locally compiled MOOSE environment. The `combined` MOOSE app is required, because the out-of-plane shear cases use the `heat_transfer` module in addition to `solid_mechanics`.
 5.  **Post-Processing (`--post`):** Assembles stress/strain responses and calculates mean stiffness matrices.
 6.  **Characterization (`--char`):** Computes sub-image statistics and metrics.
 
-## Project Layout
-All custom code lives in `main/`. OOF2 is used as-is: you never need to copy or edit files inside the OOF2 source tree.
+## Project Directory Layout
 
 ```
 MicroHom/
-├── run.sh                         # entry point
-├── config.json                    # your run configuration (see example.json)
-├── main/
-│   ├── main.py                    # pipeline driver
-│   ├── OOF_Env.py                 # locates the OOF2 install and sets up sys.path
-│   ├── run_oof2.py                # starts OOF2 and calls the mesh generator
-│   ├── generate_mesh_from_image.py
-│   └── ...                        # SVE_Builder, PostProcess, ImageExtract, etc.
-├── oof2_dir/                      # created by you (Option B only)
-│   ├── oofcanvas/                 # stock clone
-│   ├── OOF2/                      # stock clone
-│   └── local_install/             # install prefix for both
-└── singularity/                   # .def files and built .sif images
+├── run.sh                          # shell script wrapper
+├── config.json                     # your run configuration (see example/example.json)
+├── main/ 
+│   ├── main.py                     # pipeline driver
+│   ├── ImageExtract.py             # image extractor and thresholder
+│   ├── mean_stiffness_matrix.py    # mean apparent stiffness calculator
+│   ├── subimagecharacterization.py # image characterization
+│   ├── OOF_Env.py                  # locates the OOF2 install and sets up sys.path
+│   ├── run_oof2.py                 # starts OOF2 and calls the mesh generator
+│   ├── generate_mesh_from_image.py # meshes images
+├── ModelFiles/
+│   ├── Model_files_IN/             # MOOSE .i template files for in-plane LCs
+│   ├── Model_files_OUT_NORM/       # MOOSE .i template files for out-of-plane normal LC
+│   ├── Model_files_OUT_SHEAR/      # MOOSE .i template files for out-of-plane shear LCs
+├── SVE_Builder/
+│   ├── Elements.py                 # abaqus element dictionary
+│   ├── FilerReader.py              # abaqus .inp file reader
+│   ├── GenInputs.py                # MOOSE .i file generator
+│   ├── Nodes.py                    # node dictionary
+│   ├── WriteMooseInput.py          # MOOSE .i file writer
+├── PostProcess/
+│   ├── postProcess_6LCs.py         # assembles stiffness/CTE results from MOOSE output
+├── example/                        # example image and example.json template
+├── moose/                          # MOOSE checkout (local mode only; created by you)
+├── oof2_dir/                       # OOF2 build (local mode only; created by you)
+│   ├── oofcanvas/                  # stock clone
+│   ├── OOF2/                       # stock clone
+│   └── local_install/              # install prefix for both
+└── singularity/                    # .def files and built .sif images
 ```
 
 ## Prerequisites
 To run this pipeline, you need the following system-level tools:
 *   **[Apptainer/Singularity](https://apptainer.org/):** Required if running MOOSE and OOF2 via containers.
-*   **MPI (OpenMPI/MPICH):** For parallel execution of the MOOSE solver.
+*   **MPI:** For parallel execution of the MOOSE solver. MOOSE installed through conda uses **MPICH**, so the `mpiexec` used for `--sim` must come from the same environment (see [Running the simulation step](#running-the-simulation-step-local-mode)).
 *   **Python 3.8+**: For pipeline orchestration.
 *   *Note on GUI:* OOF2 requires `GTK` system libraries if run interactively, though this pipeline relies heavily on automated API calls.
 
@@ -60,7 +96,7 @@ This pipeline can be run locally (compiling the engines on your host machine) or
 | | `cluster: false` (local) | `cluster: true` (containers) |
 |---|---|---|
 | **OOF2 (`--oof`)** | `main.py` runs with `/usr/bin/python3` and uses the OOF2 install in `oof2_dir/local_install` | `main.py` runs *inside* `oof2.sif` and uses the OOF2 install baked into the image |
-| **MOOSE (`--sim`)** | `mpiexec` with the locally compiled `solid_mechanics-opt` | `mpiexec` inside `moose.sif` |
+| **MOOSE (`--sim`)** | `mpiexec` with the locally compiled `combined-opt` | `mpiexec` inside `moose.sif`, running `combined-opt` |
 
 The pipeline scripts in `main/` are never copied into OOF2 or the containers. For container runs, `run.sh` binds the whole project directory into the container at the same path, so the same `main/` scripts are used in both modes.
 
@@ -77,18 +113,42 @@ sudo singularity build singularity/moose.sif singularity/moose.def
 ```
 *(Note: Ensure the resulting `.sif` files remain in the `singularity/` directory, as expected by `main.py` and `run.sh`.)*
 
+`moose.def` builds the **`combined`** MOOSE app (`combined-opt`), which contains `solid_mechanics`, `heat_transfer` and every other MOOSE module. This build is slow and memory-hungry; it uses `make -j 4` by default, so raise that number in the `.def` only if the build machine has plenty of RAM. The MOOSE commit pinned in `moose.def` should match the commit you use for local builds.
+
+**Rebuilding an existing image:** a container build always starts from scratch, so nothing needs to be cleaned first. Rebuild and overwrite the old image with:
+```bash
+sudo singularity build --force singularity/moose.sif singularity/moose.def
+```
+If you have an older `moose.sif` that was built from the `solid_mechanics` module only, you **must** rebuild it. The older image fails at run time with `'AnisoHeatConduction' is not a registered object`.
+
 The OOF2 container must install OOF2 to `/oof2_dir/local_install`. If your image uses a different prefix, set `OOF2_PREFIX` to that location (for example, by adding `--env OOF2_PREFIX=/your/prefix` to the `singularity exec` line in `run.sh`).
 
 ### Option B: Local Compilation
 If `cluster: false` is set in your config, you must compile MOOSE and OOF2 directly on your host machine.
 
 **1. Install and Compile MOOSE**
-Follow the [official MOOSE Getting Started guide](https://mooseframework.inl.gov/getting_started/) to install Conda and set up the `moose` environment. Then, compile the solid mechanics module:
+Follow the [official MOOSE Getting Started guide](https://mooseframework.inl.gov/getting_started/) to install Conda and set up the `moose` environment, and clone MOOSE into `MicroHom/moose` (or anywhere you like; see `moose_app` below). Then compile the **combined** app, which includes every MOOSE module:
 ```bash
 conda activate moose
-cd /path/to/moose/modules/solid_mechanics
+cd /path/to/moose/modules/combined
 make -j 4
 ```
+This produces `combined-opt`. MicroHom needs the `heat_transfer` module in addition to `solid_mechanics`, so an executable built from `modules/solid_mechanics` alone is not sufficient. Check that your build contains the needed objects:
+```bash
+./combined-opt --registry | grep AnisoHeatConduction
+```
+
+*Rebuilding:* the combined app is a separate target, so you do not need to clean an existing `solid_mechanics` build before compiling it. A normal `make` is incremental. Clean only if you change the MOOSE commit or update the conda environment (`make clean` inside `modules/combined`; `make cleanall` there for a full rebuild of everything the app depends on), or if the compiler reports errors that look stale.
+
+By default the pipeline looks for `moose/modules/combined/combined-opt` inside the project. If your MOOSE is elsewhere, set `moose_app` in `config.json` (see Configuration).
+
+*Optional: a smaller custom app.* The `combined` app compiles every MOOSE module, which takes time and disk space. MicroHom only needs `solid_mechanics` and `heat_transfer`, so you can instead generate your own MOOSE app with just those two modules (for example with MOOSE's `stork` template; see the MOOSE documentation on creating an application). In the new app's `Makefile`, turn off `ALL_MODULES` and enable only the two modules:
+```make
+ALL_MODULES      := no
+SOLID_MECHANICS  := yes
+HEAT_TRANSFER    := yes
+```
+Build it with `make -j 4` from the `moose` conda environment, then point MicroHom at the resulting executable with `moose_app` (local mode) or `moose_exe` (container mode, after adapting `moose.def` to build your app). Verify the build the same way as above, with `--registry | grep AnisoHeatConduction`, and run the example before relying on it.
 
 **2. Compile OOF2 and OOFCanvas**
 Build **unmodified** OOF2 into `oof2_dir/local_install` using native system Python. No files need to be added to or edited in the OOF2 clone. *Ensure your Conda environment is deactivated before running CMake to prevent library conflicts.*
@@ -116,7 +176,14 @@ cd ../../..
 
 The system Python used here (`/usr/bin/python3`) must be the same one `run.sh` uses to launch the pipeline, since OOF2's compiled modules are tied to that Python version.
 
-**3. (Optional) Install OOF2 elsewhere**
+**3. Verify the OOF2 install**
+From the project root:
+```bash
+/usr/bin/python3 -c "import sys; sys.path.insert(0,'main'); import OOF_Env; OOF_Env.OOF2Environment.setup_paths(); import oof2; print('ok')"
+```
+If this prints `ok`, the meshing step can find OOF2.
+
+**4. (Optional) Install OOF2 elsewhere**
 `main/OOF_Env.py` looks for the OOF2 install prefix in this order:
 1. The `OOF2_PREFIX` environment variable
 2. `oof2_dir/local_install` inside this repository
@@ -127,15 +194,20 @@ If you installed OOF2 somewhere else, export the prefix before running:
 export OOF2_PREFIX=/path/to/your/oof2/install
 ```
 
-**4. Verify the OOF2 install**
-From the project root:
+#### Running the simulation step (local mode)
+OOF2 must run with conda **deactivated** (system Python), while MOOSE's `mpiexec` comes from the conda `moose` environment. In local mode, run the pipeline in two stages:
+
 ```bash
-/usr/bin/python3 -c "import sys; sys.path.insert(0,'main'); import OOF_Env; OOF_Env.OOF2Environment.setup_paths(); import oof2; print('ok')"
+# Stage 1: image extraction and meshing (conda deactivated)
+./run.sh --img --oof --config config.json
+
+# Stage 2: boundary conditions, simulation, post-processing (moose environment active)
+conda activate moose
+./run.sh --mesh --sim --post --char --config config.json
 ```
-If this prints `ok`, the meshing step can find OOF2.
 
 ## Configuration
-The simulation parameters and execution environments are centrally controlled via `config.json` (see `example.json` for a template).
+The simulation parameters and execution environments are centrally controlled via `config.json`. Copy `example/example.json` to the project root as a starting point (`cp example/example.json config.json`).
 
 **Key Config Parameters:**
 *   `cluster`: Set to `true` to execute via `.sif` containers, or `false` to use local host compilations.
@@ -147,24 +219,40 @@ The simulation parameters and execution environments are centrally controlled vi
 *   `img` / `subimg`: Number of SVEs and sub-SVEs to homogenize sequentially.
 *   `BC`: Boundary condition type (e.g., `"trac"`, `"mixed"`, `"disp"`).
 *   `materials`: Define phase-specific properties (`E`, `nu`, `alpha`, `G`, etc.). For `"model"`, select material symmetry from `"iso"` (isotropic) or `"transverse"` (transversely isotropic).
+*   `mm_per_pixel`: Physical size of one image pixel in millimetres. Used by `--post` to report the physical width and height of each SVE.
 
 ## Usage
-Use the bash script wrapper (`run.sh`) to execute the pipeline. You can chain multiple steps together in a single command.
+Use the bash script wrapper (`run.sh`) to execute the pipeline. You can chain multiple steps together in a single command, subject to the environment notes above.
 
 ```bash
-# Run the entire pipeline sequentially (local mode, cluster: false)
-./run.sh --img --oof --mesh --sim --post --char --config config.json
-
-# Run only the image extraction and meshing steps with a custom config
+# Local mode (cluster: false): meshing, then simulation with the moose environment active
 ./run.sh --img --oof --config config.json
+conda activate moose
+./run.sh --mesh --sim --post --char --config config.json
 
 # Cluster mode (cluster: true): run the OOF2 step on its own, then the rest
 ./run.sh --img --oof --config config.json
 ./run.sh --mesh --sim --post --char --config config.json
+
+# Run only the image extraction and meshing steps with a custom config
+./run.sh --img --oof --config custom_config.json
 ```
+
+## Output
+Results are written under the project root, in a folder per grid resolution (`Res<n>x<n>`):
+
+| Folder | Contents |
+|---|---|
+| `RESULTS_OOF/` | Extracted sub-images, thresholds, and the OOF2 meshes (`Img*/SubImg*/Micro.inp`) |
+| `RESULTS_linear/` | MOOSE inputs and outputs for each load case (`Img*/SubImg*/SVE*/`) and the summary file `Volume_results.csv` |
+| `RESULTS_CHAR/` | Sub-image characterization statistics (`--char`) |
+
+`Volume_results.csv` has one row per SVE with the 6×6 apparent stiffness matrix (columns `C11` through `C66`), the effective CTE components (`alpha_11_star`, `alpha_22_star`, `alpha_12_star`), phase volume fractions (`vf_i`, `vf_m`, `vf_v`), and the physical size of the SVE.
 
 ## Troubleshooting
 *   **`Could not find an OOF2 install`:** OOF2 was not installed to `oof2_dir/local_install`. Rebuild with the install prefix above or set `OOF2_PREFIX`.
 *   **`import oof2` fails or Python-version errors:** OOF2 was built against a different Python than the one launching the pipeline. Rebuild OOF2 with `/usr/bin/python3` (or edit the interpreter in `run.sh`).
 *   **Shared-library errors (e.g. OOFCanvas):** add the install's `lib`/`lib64` directory to `LD_LIBRARY_PATH`.
 *   **Meshing appears to succeed but no `Micro.inp` is written:** check `oof2_processing.log` in the results directory; errors in the mesh generator are logged there rather than raised.
+*   **`'AnisoHeatConduction' is not a registered object`:** the MOOSE executable was built without the `heat_transfer` module (for example from `modules/solid_mechanics` only). Build and use the `combined` app (`combined-opt`), or rebuild `moose.sif` from the current `moose.def`.
+*   **MPI errors such as `Runtime environment uses unsupported PMI version PMIx` (each case "finishes" in under a second):** the `mpiexec` being used belongs to a different MPI (e.g. OpenMPI) than the one MOOSE was built with (MPICH). Activate the conda `moose` environment before `--sim`, or set `mpiexec` in `config.json`.

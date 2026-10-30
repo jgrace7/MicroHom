@@ -30,7 +30,8 @@ def resolve_paths(cfg: dict) -> dict[str, Path]:
         # "oof2_dir": grand / "oof2_dir" / "OOF2",  # Updated path
         "oof2_prefix": grand / "oof2_dir" / "local_install",
         "moose_sif": grand / "singularity" / "moose.sif", 
-        "moose_app": grand / "moose" / "modules" / "solid_mechanics" / "solid_mechanics-opt",
+        "moose_app": Path(cfg["moose_app"]) if cfg.get("moose_app")
+             else grand / "moose" / "modules" / "combined" / "combined-opt",
         "img_dir": img_dir_path
     }
 
@@ -91,13 +92,14 @@ def run_oof2(paths: dict[str, Path], cfg: dict):
 
     base = paths["parent"] / "RESULTS_OOF" / f"Res{cfg['res']}x{cfg['res']}"
     epp = cfg.get("elements_per_pixel", 1.0)
+    ps_um = cfg.get("pixel_size_um", 1.0)
 
-    tasks = [(i, j, base, cfg["res"], epp)
+    tasks = [(i, j, base, cfg["res"], epp, ps_um)
              for i in range(1, cfg["img"] + 1) for j in range(1, cfg["subimg"] + 1)]
 
-    def worker(i, j, folder, size, elements_per_pixel, out_q):
+    def worker(i, j, folder, size, elements_per_pixel, pixel_size_um, out_q):
         try:
-            result = oof_runner.run(folder, size, i, j, elements_per_pixel)
+            result = oof_runner.run(folder, size, i, j, elements_per_pixel, pixel_size_um)
             if result is not True:
                 print(f"FAILED Img{i} SubImg{j}: {result}")
             out_q.put((i, j, result))
@@ -118,13 +120,15 @@ def apply_bcs(paths: dict[str, Path], cfg: dict):
         for j in range(1, cfg["subimg"]+1):
             loc = base / f"Img{i}" / f"SubImg{j}" / "Micro.inp"
             try:
-                applyBCs(loc, "RESULTS_linear", "linear", cfg["res"], cfg["BC"], i, j)
+                applyBCs(loc, "RESULTS_linear", "linear", cfg["res"], cfg["BC"], i, j, cfg["materials"])
             except Exception as e:
                 logging.error("BC failure %s %s: %s", i, j, e)
 
 def run_sims(paths: dict[str, Path], cfg: dict):
+    import shutil
+    mpiexec = cfg.get("mpiexec") or shutil.which("mpiexec")
     base = paths["parent"] / "RESULTS_linear" / f"Res{cfg['res']}x{cfg['res']}"
-
+    failures = []
     for i in range(1, cfg["img"] + 1):
         for j in range(1, cfg["subimg"] + 1):
             for k in range(cfg["LCs"]): 
@@ -134,17 +138,17 @@ def run_sims(paths: dict[str, Path], cfg: dict):
                 if cfg.get("cluster"):
                     # Execute mpiexec INSIDE the Singularity container
                     cmd = [
-                        "singularity", "exec", "--bind", f"{paths['parent']}:/projects",
+                        "singularity", "exec",
+                        "--bind", f"{paths['parent']}:{paths['parent']}",
                         str(paths["moose_sif"]),
                         "mpiexec", "-n", str(cfg["cpus"]),
-                        "solid_mechanics-opt", "-i", str(inp)
+                        cfg.get("moose_exe", "combined-opt"), "-i", str(inp)
                     ]
 
                 else:
                     # Execute via local MOOSE compilation
                     cmd = [
-                        "mpiexec", "-n", str(cfg["cpus"]),
-                        str(paths["moose_app"]), "-i", str(inp)
+                        mpiexec, "-n", str(cfg["cpus"]), str(paths["moose_app"]), "-i", str(inp)
                     ]
 
                 if cfg["dry"]: continue
@@ -153,13 +157,23 @@ def run_sims(paths: dict[str, Path], cfg: dict):
                 start = time.time()
                 proc = sub.Popen(cmd)
                 proc.wait()
-                logging.info(f"Finished in {time.time() - start:.1f} sec")
+                elapsed = time.time() - start
+
+                if proc.returncode != 0:
+                    logging.error(f"Img{i} SubImg{j} SVE{k} FAILED (exit code {proc.returncode}) after {elapsed:.1f} sec")
+                    failures.append((i, j, k))
+                    continue
+                logging.info(f"Finished in {elapsed:.1f} sec")
+
+    if failures:
+        logging.error(f"{len(failures)} simulation(s) failed: {failures}")
+        sys.exit(1)
 
 def post_process(paths: dict[str, Path], cfg: dict):
     from PostProcess.postProcess_6LCs import Post_Process_Sigma
     pp = Post_Process_Sigma(
         str(paths["parent"]), "RESULTS_linear", cfg["res"], cfg["img"],
-        cfg["subimg"], cfg["LCs"] - 1, cfg["BC"]
+        cfg["subimg"], cfg["LCs"] - 1, cfg["BC"], cfg["pixel_size_um"]
     )
     pp.run()
     pp.assemble()
@@ -170,7 +184,7 @@ def run_characterize(paths: dict[str, Path], cfg: dict):
     from subimagecharacterization import characterize_subimages
     subimage_dir = paths["parent"] / "RESULTS_OOF" / f"Res{cfg['res']}x{cfg['res']}"
     char_out_dir = paths["parent"] / "RESULTS_CHAR" / f"Res{cfg['res']}x{cfg['res']}"
-    characterize_subimages(subimage_directory=subimage_dir, output_directory=char_out_dir, pixel_size_um=1.0)
+    characterize_subimages(subimage_directory=subimage_dir, output_directory=char_out_dir, pixel_size_um=cfg["pixel_size_um"])
 
 def main():
     args = parse_arguments()

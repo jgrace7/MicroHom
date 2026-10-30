@@ -2,6 +2,7 @@
     "cluster": false,
     "img_dir": "./example",
     "binary": true,
+    "pixel_size_um": 1.0,
     "elements_per_pixel": 0.5,
     "res": 1,
     "cpus": 4,
