@@ -138,17 +138,13 @@ This produces `combined-opt`. MicroHom needs the `heat_transfer` module in addit
 ./combined-opt --registry | grep AnisoHeatConduction
 ```
 
-*Rebuilding:* the combined app is a separate target, so you do not need to clean an existing `solid_mechanics` build before compiling it. A normal `make` is incremental. Clean only if you change the MOOSE commit or update the conda environment (`make clean` inside `modules/combined`; `make cleanall` there for a full rebuild of everything the app depends on), or if the compiler reports errors that look stale.
-
-By default the pipeline looks for `moose/modules/combined/combined-opt` inside the project. If your MOOSE is elsewhere, set `moose_app` in `config.json` (see Configuration).
-
 *Optional: a smaller custom app.* The `combined` app compiles every MOOSE module, which takes time and disk space. MicroHom only needs `solid_mechanics` and `heat_transfer`, so you can instead generate your own MOOSE app with just those two modules (for example with MOOSE's `stork` template; see the MOOSE documentation on creating an application). In the new app's `Makefile`, turn off `ALL_MODULES` and enable only the two modules:
 ```make
 ALL_MODULES      := no
 SOLID_MECHANICS  := yes
 HEAT_TRANSFER    := yes
 ```
-Build it with `make -j 4` from the `moose` conda environment, then point MicroHom at the resulting executable with `moose_app` (local mode) or `moose_exe` (container mode, after adapting `moose.def` to build your app). Verify the build the same way as above, with `--registry | grep AnisoHeatConduction`, and run the example before relying on it.
+Build it with `make -j 4` from the `moose` conda environment, then point MicroHom at the resulting executable. Verify the build the same way as above, with `--registry | grep AnisoHeatConduction`, and run the example before relying on it.
 
 **2. Compile OOF2 and OOFCanvas**
 Build **unmodified** OOF2 into `oof2_dir/local_install` using native system Python. No files need to be added to or edited in the OOF2 clone. *Ensure your Conda environment is deactivated before running CMake to prevent library conflicts.*
