@@ -1,3 +1,27 @@
+"""
+Post-processing of the MOOSE results.
+
+Notation follows the write-up "Transverse Isotropy, thermomechanical response":
+
+  Voigt order        (11, 22, 33, 13, 23, 12) -> indices 1..6; engineering shear strains (2*eps_ij)
+  T / L / S          transverse (in-plane: 11, 22, 12), longitudinal (out-of-plane: 33),
+                     transverse shear (13, 23)
+  C*_TT              3x3 in-plane stiffness, C*_TT = <Sigma><E>^-1                     (31)
+  D~*_TT             (C*_TT)^-1                                                         (27a)
+  c*_TL              [C13, C23, C36]^T = <A_TT^T c_TL>   (c_LT is its transpose)        (26b)
+  c*_LL              C33 (= n)                                                          (26d)
+  C*_SS              2x2 transverse shear stiffness, ordered [13, 23]
+  A^j_TT             strain concentration of phase j, E^j <E>^-1                        (34a)
+  a^j_Ttheta         thermal concentration from the thermal LC (LC 4)                   (35a)
+  a^j_TL             eps_L concentration (2-phase closed form)                          (32b)
+  d~*_Ttheta         adjusted transverse CTE from the thermal LC                        (22a)
+  d~*_TL             -D~*_TT c*_TL                                                      (27b)
+  xi^j               volume fraction of phase j: i = inclusion (white), m = matrix (grey),
+                     v = void (black)
+  Sigma, E           3x3 matrices whose columns are the volume-averaged stress / strain of
+                     LC 1-3 (SVE0-2); LC 4 (thermal, real CTE) is SVE5                  (30)
+"""
+
 import numpy as np
 import os
 import csv
@@ -5,17 +29,20 @@ from PIL import Image
 from pathlib import Path
 from typing import Optional
 
+
 class InPlaneAnalysis:
+    """Transverse (in-plane) load cases LC 1-3: C*_TT and the phase concentrations A^j_TT."""
     def __init__(self, file_address, filename):
         self.file_address = file_address
         self.filename = filename
-        self.stress_matrix = []
-        self.strain_matrix = []
-
-        self.stress_matrix_fiber = []
-        self.stress_matrix_matrix = []
-        self.strain_matrix_fiber = []
-        self.strain_matrix_matrix = []
+        self.Sigma_avg = []     # <Sigma>
+        self.E_avg = []         # <E>
+        self.Sigma_i = []       # Sigma^i (inclusion)
+        self.E_i = []
+        self.Sigma_m = []       # Sigma^m (matrix)
+        self.E_m = []
+        self.C_i = np.zeros((6, 6))   # C^i (6x6 phase stiffness, Voigt)
+        self.C_m = np.zeros((6, 6))
 
     def get_phase_C_tensor(self, phase_suffix, row):
         C = np.zeros((6, 6))
@@ -34,6 +61,7 @@ class InPlaneAnalysis:
         return C
 
     def read_row(self):
+        """Returns <sigma_T>, <eps_T>, sigma_T^i, eps_T^i, sigma_T^m, eps_T^m, C^i, C^m."""
         input_file_name = os.path.join(self.file_address, self.filename)
         try:
             with open(input_file_name, "r") as input_file:
@@ -45,34 +73,34 @@ class InPlaneAnalysis:
 
                 last_row = rows[-1]
                 try:
-                    strain = np.array([
+                    eps_T = np.array([
                         float(last_row["avg_strain_xx"]),
                         float(last_row["avg_strain_yy"]),
                         float(last_row["avg_strain_xy"])*2,
                     ])
-                    stress = np.array([
+                    sigma_T = np.array([
                         float(last_row["avg_stress_xx"]),
                         float(last_row["avg_stress_yy"]),
                         float(last_row["avg_stress_xy"]),
                     ])
 
-                    strain_fiber = np.array([
+                    eps_T_i = np.array([
                         float(last_row.get("avg_strain_xx_white", 0.0)),
                         float(last_row.get("avg_strain_yy_white", 0.0)),
                         float(last_row.get("avg_strain_xy_white", 0.0))*2,
                     ])
-                    stress_fiber = np.array([
+                    sigma_T_i = np.array([
                         float(last_row.get("avg_stress_xx_white", 0.0)),
                         float(last_row.get("avg_stress_yy_white", 0.0)),
                         float(last_row.get("avg_stress_xy_white", 0.0)),
                     ])
 
-                    strain_matrix = np.array([
+                    eps_T_m = np.array([
                         float(last_row.get("avg_strain_xx_grey", 0.0)),
                         float(last_row.get("avg_strain_yy_grey", 0.0)),
                         float(last_row.get("avg_strain_xy_grey", 0.0))*2,
                     ])
-                    stress_matrix = np.array([
+                    sigma_T_m = np.array([
                         float(last_row.get("avg_stress_xx_grey", 0.0)),
                         float(last_row.get("avg_stress_yy_grey", 0.0)),
                         float(last_row.get("avg_stress_xy_grey", 0.0)),
@@ -81,21 +109,21 @@ class InPlaneAnalysis:
                 except ValueError:
                     print(f"NaN present in {input_file_name}.")
                     return (None,) * 8
-                
-                self.stress_matrix = stress
-                self.strain_matrix = strain
-                self.stress_matrix_fiber = stress_fiber
-                self.strain_matrix_fiber = strain_fiber
-                self.stress_matrix_matrix = stress_matrix
-                self.strain_matrix_matrix = strain_matrix
 
-                C_fiber = self.get_phase_C_tensor("white", last_row)
-                C_matrix = self.get_phase_C_tensor("grey", last_row)
-                self.C_matrix_fiber = C_fiber
-                self.C_matrix_matrix = C_matrix
+                self.Sigma_avg = sigma_T
+                self.E_avg = eps_T
+                self.Sigma_i = sigma_T_i
+                self.E_i = eps_T_i
+                self.Sigma_m = sigma_T_m
+                self.E_m = eps_T_m
 
-                return stress, strain, stress_fiber, strain_fiber, stress_matrix, strain_matrix, C_fiber, C_matrix
-            
+                C_i = self.get_phase_C_tensor("white", last_row)
+                C_m = self.get_phase_C_tensor("grey", last_row)
+                self.C_i = C_i
+                self.C_m = C_m
+
+                return sigma_T, eps_T, sigma_T_i, eps_T_i, sigma_T_m, eps_T_m, C_i, C_m
+
         except FileNotFoundError:
             print(f"File {input_file_name} does not exist.")
             return (None,) * 8
@@ -103,49 +131,43 @@ class InPlaneAnalysis:
             print(f"Error reading {input_file_name}: {e}")
             return (None,) * 8
 
-    def form_matrices(self, stresses, strains, stresses_fiber=None, strains_fiber=None,
-                    stresses_matrix=None, strains_matrix=None):
-        if stresses and strains:
+    def form_matrices(self, Sigmas, Es, Sigmas_i=None, Es_i=None, Sigmas_m=None, Es_m=None):
+        """Stack the LC 1-3 vectors (dicts keyed by SVE index 0, 1, 2) into the matrices of (30)."""
+        if Sigmas and Es:
             order = [0, 1, 2]
-            stress_values = [stresses[k] for k in order]
-            strain_values = [strains[k] for k in order]
-            self.stress_matrix = np.transpose(np.array(stress_values))
-            self.strain_matrix = np.transpose(np.array(strain_values))
+            self.Sigma_avg = np.transpose(np.array([Sigmas[k] for k in order]))
+            self.E_avg = np.transpose(np.array([Es[k] for k in order]))
 
-            if stresses_fiber and strains_fiber:
-                stress_values_f = [stresses_fiber[k] for k in order]
-                strain_values_f = [strains_fiber[k] for k in order]
-                self.stress_matrix_fiber = np.transpose(np.array(stress_values_f))
-                self.strain_matrix_fiber = np.transpose(np.array(strain_values_f))
+            if Sigmas_i and Es_i:
+                self.Sigma_i = np.transpose(np.array([Sigmas_i[k] for k in order]))
+                self.E_i = np.transpose(np.array([Es_i[k] for k in order]))
 
-            if stresses_matrix and strains_matrix:
-                stress_values_m = [stresses_matrix[k] for k in order]
-                strain_values_m = [strains_matrix[k] for k in order]
-                self.stress_matrix_matrix = np.transpose(np.array(stress_values_m))
-                self.strain_matrix_matrix = np.transpose(np.array(strain_values_m))
+            if Sigmas_m and Es_m:
+                self.Sigma_m = np.transpose(np.array([Sigmas_m[k] for k in order]))
+                self.E_m = np.transpose(np.array([Es_m[k] for k in order]))
         else:
             print("No stress or strain.")
-            self.stress_matrix = np.array([])
-            self.strain_matrix = np.array([])
+            self.Sigma_avg = np.array([])
+            self.E_avg = np.array([])
 
-    def C_matrix(self):
+    def C_TT_star(self):
+        """C*_TT = <Sigma> <E>^-1   (31), raw (not symmetrized)."""
         try:
-            inverse_strain = np.linalg.inv(self.strain_matrix)
-            C_matrix = self.stress_matrix @ inverse_strain 
+            return self.Sigma_avg @ np.linalg.inv(self.E_avg)
         except np.linalg.LinAlgError:
             print("Error: Issue with strain matrix inversion.")
-            C_matrix = np.full((3, 3), np.nan)
-        return C_matrix
+            return np.full((3, 3), np.nan)
 
 
 class OutofPlaneAnalysis:
     def __init__(self, file_address, filename):
         self.file_address = file_address
         self.filename = filename
-        self.tau_matrix = []
-        self.gamma_matrix = []
+        self.Sigma_S = []
+        self.E_S = []
 
     def read_row(self):
+        """Returns sigma_S = [tau_xz, tau_yz] and eps_S = [gamma_xz, gamma_yz] (engineering shear)."""
         input_file_name = os.path.join(self.file_address, self.filename)
         try:
             with open(input_file_name, "r") as input_file:
@@ -186,24 +208,27 @@ class OutofPlaneAnalysis:
         if taus and gammas:
             tau_values = [taus[key] for key in sorted(taus)]
             gamma_values = [gammas[key] for key in sorted(gammas)]
-            self.tau_matrix = np.transpose(np.array(tau_values))
-            self.gamma_matrix = np.transpose(np.array(gamma_values))
+            self.Sigma_S = np.transpose(np.array(tau_values))
+            self.E_S = np.transpose(np.array(gamma_values))
         else:
             print("No Stress or Strain.")
-            self.tau_matrix = np.array([])
-            self.gamma_matrix = np.array([])
+            self.Sigma_S = np.array([])
+            self.E_S = np.array([])
 
-    def G_matrix(self):
+    def C_SS_star(self):
+        """C*_SS = <Sigma_S> <E_S>^-1, ordered [13, 23], raw (not symmetrized)."""
         try:
-            inverse_gamma = np.linalg.inv(self.gamma_matrix)
-            G_matrix = self.tau_matrix @ inverse_gamma
+            inverse_gamma = np.linalg.inv(self.E_S)
+            C_SS = self.Sigma_S @ inverse_gamma
         except np.linalg.LinAlgError:
             print("Error: Issue with gamma matrix inversion.")
-            G_matrix = np.full((2, 2), np.nan)
-        return G_matrix
+            C_SS = np.full((2, 2), np.nan)
+        return C_SS
+
 
 
 class Post_Process_Thermal:
+    """Thermal LC 4 (SVE5, real CTE) plus the out-of-plane coupling terms c*_TL, c*_LL."""
     def __init__(self, parent, results_tag, res, img, subimg, LCs, BC, therm_cfg: Optional[dict] = None, inplane_ref: Optional['InPlaneAnalysis'] = None):
         self.parent = Path(parent)
         self.results_tag = results_tag
@@ -223,13 +248,13 @@ class Post_Process_Thermal:
 
         self.linear_results_csv = Path(
             self.cfg.get(
-                "thermal_results_csv",
+                "linear_results_csv",
                 self.parent / f"RESULTS_linear/Res{self.res}x{self.res}/Img{self.img}/SubImg{self.subimg}/SVE0/input.csv"
             )
         )
 
         self.uniform = bool(self.cfg.get("uniform", True))
-        self.delta_T = float(self.cfg.get("delta_T", 1))
+        self.delta_theta = float(self.cfg.get("delta_theta", 1))
         self.output_name = self.cfg.get("output_name", f"MOOSE_FEM_RES{self.res}_{self.BC}.txt")
 
     @staticmethod
@@ -243,122 +268,111 @@ class Post_Process_Thermal:
     def _InPlane_data(self):
         if self.inplane_ref is None:
             raise RuntimeError("No InPlaneAnalysis reference provided")
-        inplane = self.inplane_ref
-        return (inplane.C_matrix(), inplane.stress_matrix, inplane.strain_matrix,
-                inplane.stress_matrix_fiber, inplane.stress_matrix_matrix,
-                inplane.strain_matrix_fiber, inplane.strain_matrix_matrix,
-                inplane.C_matrix_fiber, inplane.C_matrix_matrix)
-        
-    def _compute_analytical_2p(self, vf_i, CTT_i, CTT_m, CTT_star, cLT_i, cLT_m, cLL_i, cLL_m, DTT_star):
-        """Computes the analytical two-phase concentration and stiffness parameters."""
-        if vf_i > 0.0:
-            ATT_i_2p = (1/vf_i) * (np.linalg.inv(CTT_i - CTT_m)) @ (CTT_star - CTT_m)
+        ip = self.inplane_ref
+        return (ip.C_TT_star(), ip.Sigma_avg, ip.E_avg,
+                ip.Sigma_i, ip.Sigma_m, ip.E_i, ip.E_m,
+                ip.C_i, ip.C_m)
+
+    @staticmethod
+    def _compute_analytical_2p(xi_i, C_TT_i, C_TT_m, C_TT_star, c_TL_i, c_TL_m, c_LL_i, c_LL_m, D_TT_star):
+        """2-phase closed forms (xi_m = 1 - xi_i): A^j_TT (32a), a^j_TL (32b), c*_TL (26b),
+        d~*_TL (27b) and c*_LL (26d)."""
+        xi_m = 1.0 - xi_i
+        I3 = np.eye(3)
+
+        if xi_i > 0.0:
+            A_TT_i = (1.0 / xi_i) * np.linalg.inv(C_TT_i - C_TT_m) @ (C_TT_star - C_TT_m)
         else:
-            ATT_i_2p = np.zeros_like(CTT_m)
-            
-        ATT_m_2p = (np.eye(3) - vf_i*ATT_i_2p) / (1 - vf_i) if (1 - vf_i) > 0 else np.zeros_like(CTT_m)
-        
-        cLT_star_2p = vf_i * (ATT_i_2p.T @ cLT_i) + (1 - vf_i) * (ATT_m_2p.T @ cLT_m)
-        dLT_star_2p = -DTT_star @ cLT_star_2p
-        
-        aLT_i_2p = np.linalg.inv(CTT_i - CTT_m) @ (ATT_i_2p - np.eye(3)) @ (cLT_i - cLT_m)
-        aLT_m_2p = np.linalg.inv(CTT_m - CTT_i) @ (ATT_m_2p - np.eye(3)) @ (cLT_m - cLT_i)
-        aTL_i_2p = aLT_i_2p
-        aTL_m_2p = aLT_m_2p
-        
-        cLL_V = vf_i * cLL_i + (1 - vf_i) * cLL_m
-        cLL_star_2p = cLL_V + vf_i * cLT_i @ aTL_i_2p + (1 - vf_i) * cLT_m @ aTL_m_2p
-        
-        return cLT_star_2p, dLT_star_2p, aTL_i_2p, aTL_m_2p, cLL_star_2p
+            A_TT_i = np.zeros_like(C_TT_m)
+        A_TT_m = (I3 - xi_i * A_TT_i) / xi_m if xi_m > 0 else np.zeros_like(C_TT_m)
+
+        c_TL_star = xi_i * (A_TT_i.T @ c_TL_i) + xi_m * (A_TT_m.T @ c_TL_m)
+        d_TL_star = -D_TT_star @ c_TL_star
+
+        a_TL_i = (A_TT_i - I3) @ np.linalg.inv(C_TT_i - C_TT_m) @ (c_TL_i - c_TL_m)
+        a_TL_m = -(xi_i / xi_m) * a_TL_i if xi_m > 0 else np.zeros(3)
+
+        c_LL_voigt = xi_i * c_LL_i + xi_m * c_LL_m
+        c_LL_star = c_LL_voigt + xi_i * (c_TL_i @ a_TL_i) + xi_m * (c_TL_m @ a_TL_m)
+
+        return c_TL_star, d_TL_star, a_TL_i, a_TL_m, c_LL_star
 
     def run(self):
-        CTT_star, sig, eps, sig_I, sig_M, eps_I, eps_M, C_i, C_m = self._InPlane_data()
-        DTT_star = np.linalg.inv(CTT_star)
+        C_TT_star, Sigma_avg, E_avg, Sigma_i, Sigma_m, E_i, E_m, C_i, C_m = self._InPlane_data()
+        D_TT_star = np.linalg.inv(C_TT_star)          # D~*_TT
 
         trow = self._read_last_row(self.thermal_results_csv)
         lrow = self._read_last_row(self.linear_results_csv)
 
-        sig_therm = np.array([float(trow.get("Global_S11", 0.0)),
-                              float(trow.get("Global_S22", 0.0)),
-                              float(trow.get("Global_S12", 0.0))])
-        
-        eps_therm = np.array([float(trow.get("Global_E11", 0.0)),
+        # LC 4 (thermal, real CTE): volume-averaged transverse stress and strain, global and per phase
+        sigma_T_LC4 = np.array([float(trow.get("Global_S11", 0.0)),
+                                float(trow.get("Global_S22", 0.0)),
+                                float(trow.get("Global_S12", 0.0))])
+        eps_T_LC4 = np.array([float(trow.get("Global_E11", 0.0)),
                               float(trow.get("Global_E22", 0.0)),
                               float(trow.get("Global_E12", 0.0))])
-        
-        eps_i_therm = np.array([float(trow.get("Fiber_E11", 0.0)),
+        eps_T_i_LC4 = np.array([float(trow.get("Fiber_E11", 0.0)),
                                 float(trow.get("Fiber_E22", 0.0)),
                                 float(trow.get("Fiber_E12", 0.0))])
-        
-        eps_m_therm = np.array([float(trow.get("Matrix_E11", 0.0)),
+        eps_T_m_LC4 = np.array([float(trow.get("Matrix_E11", 0.0)),
                                 float(trow.get("Matrix_E22", 0.0)),
                                 float(trow.get("Matrix_E12", 0.0))])
 
         vol_white = float(lrow.get("volume_white", 0.0))
-        vol_grey  = float(lrow.get("volume_grey", 0.0))
+        vol_grey = float(lrow.get("volume_grey", 0.0))
         vol_black = float(lrow.get("volume_black", 0.0))
         total_vol = vol_white + vol_grey + vol_black
 
         if total_vol > 0:
-            vf_i = vol_white / total_vol
-            vf_m = vol_grey / total_vol
-            vf_v = vol_black / total_vol
+            xi_i = vol_white / total_vol
+            xi_m = vol_grey / total_vol
+            xi_v = vol_black / total_vol
         else:
-            vf_i = vf_m = vf_v = 0.0
+            xi_i = xi_m = xi_v = 0.0
 
-        dTtheta = (eps_therm - (DTT_star @ sig_therm)) / self.delta_T
-        
-        alpha_11_star = float(dTtheta[0])
-        alpha_22_star = float(dTtheta[1])
-        alpha_12_star = float(dTtheta[2])
+        # d~*_Ttheta = (<eps_T> - D~*_TT <sigma_T>) / dtheta     (22a with eps_L = 0)
+        d_tilde_Ttheta_star = (eps_T_LC4 - (D_TT_star @ sigma_T_LC4)) / self.delta_theta
 
-        in_plane_indices = [0, 1, 5]
-        CTT_i = C_i[np.ix_(in_plane_indices, in_plane_indices)]
-        CTT_m = C_m[np.ix_(in_plane_indices, in_plane_indices)]
+        T = [0, 1, 5]    # transverse indices (11, 22, 12) in the 6x6 Voigt order
+        C_TT_i = C_i[np.ix_(T, T)]
+        C_TT_m = C_m[np.ix_(T, T)]
 
-        cLT_i = C_i[in_plane_indices, 2]
-        cLT_m = C_m[in_plane_indices, 2]
+        c_TL_i = C_i[T, 2]       # [C13, C23, C36] of the inclusion
+        c_TL_m = C_m[T, 2]
+        c_LL_i = C_i[2, 2]       # C33
+        c_LL_m = C_m[2, 2]
 
-        ATT_i = eps_I @ np.linalg.inv(eps)
-        ATT_m = eps_M @ np.linalg.inv(eps)
+        A_TT_i = E_i @ np.linalg.inv(E_avg)      # (34a)
+        A_TT_m = E_m @ np.linalg.inv(E_avg)
 
-        cLT_star = vf_i * (ATT_i.T @ cLT_i) + (1 - vf_i) * (ATT_m.T @ cLT_m)
-        dLT_star = -DTT_star @ cLT_star
+        # c*_TL = sum_j xi^j (A^j_TT)^T c^j_TL     (26b). Sum over the phases with xi^j (void: c_TL ~ 0)
+        c_TL_star = xi_i * (A_TT_i.T @ c_TL_i) + xi_m * (A_TT_m.T @ c_TL_m)
+        d_TL_star = -D_TT_star @ c_TL_star       # (27b)
 
-        aTL_i = (eps_i_therm - (ATT_i @ eps_therm)) / self.delta_T
-        aTL_m = (eps_m_therm - (ATT_m @ eps_therm)) / self.delta_T
-        aLT_i = aTL_i.T
-        aLT_m = aTL_m.T
+        # a^j_Ttheta from the thermal LC     (35a)
+        a_Ttheta_i = (eps_T_i_LC4 - (A_TT_i @ eps_T_LC4)) / self.delta_theta
+        a_Ttheta_m = (eps_T_m_LC4 - (A_TT_m @ eps_T_LC4)) / self.delta_theta
 
-        cLL_i = C_i[2, 2]
-        cLL_m = C_m[2, 2]
-        cLL_star = vf_i * (cLL_i + cLT_i @ aTL_i) + (1 - vf_i) * (cLL_m + cLT_m @ aTL_m)
-
-        cLT_star_2p, dLT_star_2p, aTL_i_2p, aTL_m_2p, cLL_star_2p = self._compute_analytical_2p(
-            vf_i, CTT_i, CTT_m, CTT_star, cLT_i, cLT_m, cLL_i, cLL_m, DTT_star
+        c_TL_star_2p, d_TL_star_2p, a_TL_i_2p, a_TL_m_2p, c_LL_star_2p = self._compute_analytical_2p(
+            xi_i, C_TT_i, C_TT_m, C_TT_star, c_TL_i, c_TL_m, c_LL_i, c_LL_m, D_TT_star
         )
 
-        C_star = np.array([cLT_star[0], cLT_star[1], float(cLL_star_2p)])
+        c_LL_star = float(c_LL_star_2p)
 
         return {
-            "C11_star": float(C_star[0]),
-            "C22_star": float(C_star[1]),
-            "C33_star": float(C_star[2]),
-            "cLT_star_0": float(cLT_star[0]),
-            "dLT_star_0": float(dLT_star[0]),
-            "aLT_i_0": float(aTL_i[0]),
-            "aLT_m_0": float(aTL_m[0]),
-            "cLT_star_0_2p": float(cLT_star_2p[0]),
-            "dLT_star_0_2p": float(dLT_star_2p[0]),
-            "aLT_i_0_2p": float(aTL_i_2p[0]),
-            "aLT_m_0_2p": float(aTL_m_2p[0]),
-            "cLL*_2p": float(cLL_star_2p),
-            "volume_fraction_inclusion": vf_i,
-            "volume_fraction_matrix": vf_m,
-            "volume_fraction_void": vf_v,
-            "alpha_11_star": alpha_11_star,
-            "alpha_22_star": alpha_22_star,
-            "alpha_12_star": alpha_12_star,
+            # homogenized out-of-plane coupling (go into the 6x6 matrix)
+            "c_TL_star": c_TL_star,                      # [C13, C23, C36]
+            "c_LL_star": c_LL_star,                      # C33
+            # diagnostics: numeric (from simulations) vs. 2-phase closed form
+            "d_TL_star_11": float(d_TL_star[0]),
+            "a_Ttheta_i_11": float(a_Ttheta_i[0]),
+            "a_Ttheta_m_11": float(a_Ttheta_m[0]),
+            "c_TL_star_2p_11": float(c_TL_star_2p[0]),
+            "d_TL_star_2p_11": float(d_TL_star_2p[0]),
+            "xi_i": xi_i,
+            "xi_m": xi_m,
+            "xi_v": xi_v,
+            "d_tilde_Ttheta_star": d_tilde_Ttheta_star,  # [11, 22, 12]
         }
 
 
@@ -390,48 +404,48 @@ class Post_Process_Sigma:
         results_dir = os.path.join(self.project_dir, self.homo_name, f"Res{self.res}x{self.res}")
         os.makedirs(results_dir, exist_ok=True)
 
+        T = [0, 1, 5]      # transverse (11, 22, 12) rows/cols of the 6x6 Voigt matrix
+        L = 2              # longitudinal (33)
+        S = [3, 4]         # transverse shear (13, 23)
+
         for i in range(1, self.I + 1):
             img_dir = os.path.join(results_dir, f"Img{i}")
 
             for j in range(1, self.J + 1):
                 sub_dir = os.path.join(img_dir, f"SubImg{j}")
-                stresses, strains = {}, {}
-                taus, gammas = {}, {}
-                stresses_fiber, strains_fiber = {}, {}
-                stresses_matrix, strains_matrix = {}, {}
+                Sigmas, Es = {}, {}                  # <sigma_T>, <eps_T> of LC 1-3
+                Sigmas_i, Es_i = {}, {}              # inclusion
+                Sigmas_m, Es_m = {}, {}              # matrix
+                Sigmas_S, Es_S = {}, {}              # <sigma_S>, <eps_S> of the shear LCs
 
                 inplane_ref, shear_analysis = None, None
-                C_lin, G = None, None
+                C_TT, C_SS = None, None
 
                 for sve_idx in range(self.LCs):
                     sve_dir = os.path.join(sub_dir, f"SVE{sve_idx}")
 
                     if sve_idx <= 2:
                         rve_analysis = InPlaneAnalysis(sve_dir, "input.csv")
-                        stress, strain, stress_fiber, strain_fiber, stress_matrix, strain_matrix, C_fiber, C_matrix = rve_analysis.read_row()
-                        if stress is not None and strain is not None:
-                            stresses[sve_idx] = stress
-                            strains[sve_idx] = strain
-                            stresses_fiber[sve_idx] = stress_fiber
-                            strains_fiber[sve_idx] = strain_fiber
-                            stresses_matrix[sve_idx] = stress_matrix
-                            strains_matrix[sve_idx] = strain_matrix
+                        sigma_T, eps_T, sigma_T_i, eps_T_i, sigma_T_m, eps_T_m, C_i, C_m = rve_analysis.read_row()
+                        if sigma_T is not None and eps_T is not None:
+                            Sigmas[sve_idx] = sigma_T
+                            Es[sve_idx] = eps_T
+                            Sigmas_i[sve_idx] = sigma_T_i
+                            Es_i[sve_idx] = eps_T_i
+                            Sigmas_m[sve_idx] = sigma_T_m
+                            Es_m[sve_idx] = eps_T_m
                             inplane_ref = rve_analysis
 
-                    else: 
+                    else:
                         shear_analysis = OutofPlaneAnalysis(sve_dir, "input.csv")
-                        tau, gamma = shear_analysis.read_row()
-                        if tau is not None and gamma is not None:
-                            taus[sve_idx] = tau
-                            gammas[sve_idx] = gamma
+                        sigma_S, eps_S = shear_analysis.read_row()
+                        if sigma_S is not None and eps_S is not None:
+                            Sigmas_S[sve_idx] = sigma_S
+                            Es_S[sve_idx] = eps_S
 
-                if inplane_ref and len(stresses) == 3 and len(strains) == 3:
-                    inplane_ref.form_matrices(
-                        stresses, strains,
-                        stresses_fiber, strains_fiber,
-                        stresses_matrix, strains_matrix
-                    )
-                    C_lin = inplane_ref.C_matrix()
+                if inplane_ref and len(Sigmas) == 3 and len(Es) == 3:
+                    inplane_ref.form_matrices(Sigmas, Es, Sigmas_i, Es_i, Sigmas_m, Es_m)
+                    C_TT = inplane_ref.C_TT_star()
 
                 ppT = Post_Process_Thermal(
                     self.project_dir, self.homo_name,
@@ -440,53 +454,35 @@ class Post_Process_Sigma:
                 )
                 thermal_results = ppT.run()
 
-                if shear_analysis and taus and gammas:
-                    shear_analysis.form_matrices(taus, gammas)
-                    G = shear_analysis.G_matrix()
+                if shear_analysis and Sigmas_S and Es_S:
+                    shear_analysis.form_matrices(Sigmas_S, Es_S)
+                    C_SS = shear_analysis.C_SS_star()
 
+                # Assemble C* in the Voigt order of the write-up: (11, 22, 33, 13, 23, 12).
+                # All entries that were measured are written raw (no symmetrization).
                 C_full = np.zeros((6, 6))
-                if C_lin is not None and not np.isnan(C_lin).any():
-                    C_full[0, 0] = C_lin[0, 0]
-                    C_full[1, 1] = C_lin[1, 1]
-                    val_12 = 0.5 * (C_lin[0, 1] + C_lin[1, 0])
-                    C_full[0, 1] = C_full[1, 0] = val_12
-                    C_full[5, 5] = C_lin[2, 2]
+                if C_TT is not None and not np.isnan(C_TT).any():
+                    C_full[np.ix_(T, T)] = C_TT                         # C*_TT
 
-                    val_16 = 0.5 * (C_lin[0, 2] + C_lin[2, 0])
-                    C_full[0, 5] = C_full[5, 0] = val_16
-                    
-                    val_26 = 0.5 * (C_lin[1, 2] + C_lin[2, 1])
-                    C_full[1, 5] = C_full[5, 1] = val_26
+                # c*_TL = [C13, C23, C36]^T was measured (in-plane stress caused by eps_33).
+                # The matching row c*_LT is filled from it by major symmetry, since sigma_33 is not measured.
+                C_full[T, L] = thermal_results["c_TL_star"]
+                C_full[L, T] = thermal_results["c_TL_star"]
+                C_full[L, L] = thermal_results["c_LL_star"]             # c*_LL = C33
 
-                C_full[0, 2] = C_full[2, 0] = thermal_results["C11_star"] 
-                C_full[1, 2] = C_full[2, 1] = thermal_results["C22_star"] 
-                C_full[2, 2] = thermal_results["C33_star"]                
-
-                if G is not None and not np.isnan(G).any():
-                    C_full[3, 3] = G[1, 1]
-                    C_full[4, 4] = G[0, 0]
-                    val_45 = 0.5 * (G[0, 1] + G[1, 0])
-                    C_full[3, 4] = C_full[4, 3] = val_45
+                if C_SS is not None and not np.isnan(C_SS).any():
+                    C_full[np.ix_(S, S)] = C_SS                         # C*_SS, ordered [13, 23]
 
                 phys_width, phys_height = self.get_physical_dimensions(i, j, self.pixel_size_um)
 
+                d_tilde = thermal_results["d_tilde_Ttheta_star"]
                 extra_vars = [
-                    thermal_results["C33_star"],
-                    thermal_results["cLT_star_0"],
-                    thermal_results["dLT_star_0"],
-                    thermal_results["aLT_i_0"],
-                    thermal_results["aLT_m_0"],
-                    thermal_results["cLL*_2p"],
-                    thermal_results["cLT_star_0_2p"],
-                    thermal_results["dLT_star_0_2p"],
-                    thermal_results["aLT_i_0_2p"],
-                    thermal_results["aLT_m_0_2p"],
-                    thermal_results["volume_fraction_inclusion"],
-                    thermal_results["volume_fraction_matrix"],
-                    thermal_results["volume_fraction_void"],
-                    thermal_results["alpha_11_star"],
-                    thermal_results["alpha_22_star"],
-                    thermal_results["alpha_12_star"],
+                    float(d_tilde[0]),
+                    float(d_tilde[1]),
+                    float(d_tilde[2]),
+                    thermal_results["xi_i"],
+                    thermal_results["xi_m"],
+                    thermal_results["xi_v"],
                     phys_width,
                     phys_height,
                 ]
@@ -495,12 +491,10 @@ class Post_Process_Sigma:
 
         csv_file = os.path.join(results_dir, "Volume_results.csv")
         headers = (
-            ["Img", "SubImg"] + 
-            [f"C{r+1}{c+1}" for r in range(6) for c in range(6)] + 
-            ["cLL_star", "cLT_star", "dLT_star", "aLT_i", "aLT_m", 
-             "cLL_star_2p", "cLT_star_2p", "dLT_star_2p", "aLT_i_2p", "aLT_m_2p", 
-             "vf_i", "vf_m", "vf_v", "alpha_11_star", "alpha_22_star", "alpha_12_star", 
-             "physical_width", "physical_height"]
+            ["Img", "SubImg"] +
+            [f"C{r+1}{c+1}" for r in range(6) for c in range(6)] +      # C*_ab, Voigt order 11,22,33,13,23,12
+            ["dtilde_Ttheta_11", "dtilde_Ttheta_22", "dtilde_Ttheta_12",
+             "xi_i", "xi_m", "xi_v", "physical_width", "physical_height"]
         )
         with open(csv_file, "w", newline="") as f:
             writer = csv.writer(f)
@@ -523,11 +517,6 @@ class Post_Process_Sigma:
 
                     vals = np.array(list(map(float, row[2:38])))
                     C = vals.reshape(6, 6)
-
-                    print(f"Stiffness Matrix (6x6) for res {self.res} Img {img}, SubImg {subimg}:")
-                    for row_vals in np.round(C, 6):
-                        print(" ".join(f"{val:12.6f}" for val in row_vals))
-                    print()
 
                     out.append((img, subimg, C))
                 except Exception as e:

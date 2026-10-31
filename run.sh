@@ -55,5 +55,4 @@ fi
 [[ "$char" == "True" ]] && cmd+=(--char)
 
 # -------- Run ----------------------------------------
-echo "Running requested steps on ${HOSTNAME:-local machine}"
 "${cmd[@]}"

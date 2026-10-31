@@ -651,14 +651,6 @@ class OutofPlaneNormalFile:
         with open(out_path, "w") as f:
             f.write(content)
             f.write("\n")
-    
-    def write_var_block(self, dir, i):
-        with open(os.path.join(self.FILE_DIR, "Variables.i")) as f:
-            content = f.read()
-        out_path = os.path.join(dir, f'SVE{i}', self.INPUT)
-        with open(out_path, "a") as f:
-            f.write(content)
-            f.write("\n")
 
     def write_params_block(self, dir, i):
         with open(os.path.join(self.FILE_DIR, "GlobalParams.i")) as f:
@@ -896,7 +888,6 @@ class OutofPlaneNormalFile:
 
         self.make_SVE_dir(dir, i)
         self.write_mesh_block(dir, i)
-        self.write_var_block(dir, i)
         self.write_params_block(dir, i)
         self.write_physics_block(dir, i)
         self.write_materials_block(dir, i, delta_T=1) # REAL Del T: -1930)

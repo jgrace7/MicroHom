@@ -26,12 +26,12 @@ configuration section). Large images can be divided into an n×n grid of sub-ima
 to study statistical volume element (SVE) size effects.
 
 ## Architecture & Workflow
-The pipeline operates through modular, concurrent execution of the following stages:
-1.  **Image Processing (`--img`):** Extracts domain sub-images, quantizes phases, and characterizes morphology using `scikit-image` and `Pillow`.
-2.  **OOF2 Meshing (`--oof`):** Drives a **stock, unmodified OOF2 install** through its Python API using the scripts in `main/` (`OOF_Env.py`, `run_oof2.py`, `generate_mesh_from_image.py`) to generate representative quad-meshes from extracted SVEs.
+The pipeline is organized as independent stages, each selected with a command-line flag (see [Usage](#usage)):
+1.  **Image Processing (`--img`):** Thresholds images, differentiates phases, and extracts domain sub-images.
+2.  **OOF2 Meshing (`--oof`):** Drives a **stock, unmodified OOF2 install** through its Python API using the scripts in `main/` (`OOF_Env.py`, `run_oof2.py`, `generate_mesh_from_image.py`) to generate uniform quad-meshes from extracted SVEs.
 3.  **MOOSE Input File Generation (`--mesh`):** Applies GPS and CTE boundary conditions to the generated meshes.
-4.  **MOOSE Simulation (`--sim`):** Executes high-performance finite element analysis using either a containerized or locally compiled MOOSE environment. The `combined` MOOSE app is required, because the out-of-plane shear cases use the `heat_transfer` module in addition to `solid_mechanics`.
-5.  **Post-Processing (`--post`):** Assembles stress/strain responses and calculates mean stiffness matrices.
+4.  **MOOSE Simulation (`--sim`):** Executes high-performance finite element analysis using either a containerized or locally compiled MOOSE environment. The `heat_transfer` and `solid_mechanics` modules are required.
+5.  **Post-Processing (`--post`):** Assembles stress/strain responses and computes the apparent stiffness and CTE.
 6.  **Characterization (`--char`):** Computes sub-image statistics and metrics.
 
 ## Project Directory Layout
@@ -40,6 +40,7 @@ The pipeline operates through modular, concurrent execution of the following sta
 MicroHom/
 ├── run.sh                          # shell script wrapper
 ├── config.json                     # your run configuration (see example/example.json)
+├── requirements.txt                # Python dependencies
 ├── main/ 
 │   ├── main.py                     # pipeline driver
 │   ├── ImageExtract.py             # image extractor and thresholder
@@ -74,6 +75,7 @@ To run this pipeline, you need the following system-level tools:
 *   **[Apptainer/Singularity](https://apptainer.org/):** Required if running MOOSE and OOF2 via containers.
 *   **MPI:** For parallel execution of the MOOSE solver. MOOSE installed through conda uses **MPICH**, so the `mpiexec` used for `--sim` must come from the same environment (see [Running the simulation step](#running-the-simulation-step-local-mode)).
 *   **Python 3.8+**: For pipeline orchestration.
+*   **Local compilation only:** [Conda](https://github.com/conda-forge/miniforge) (for the MOOSE environment), a C++ compiler, and CMake, plus the build dependencies listed in the MOOSE and OOF2 documentation.
 *   *Note on GUI:* OOF2 requires `GTK` system libraries if run interactively, though this pipeline relies heavily on automated API calls.
 
 ## Base Installation
@@ -119,9 +121,8 @@ sudo singularity build singularity/moose.sif singularity/moose.def
 ```bash
 sudo singularity build --force singularity/moose.sif singularity/moose.def
 ```
-If you have an older `moose.sif` that was built from the `solid_mechanics` module only, you **must** rebuild it. The older image fails at run time with `'AnisoHeatConduction' is not a registered object`.
 
-The OOF2 container must install OOF2 to `/oof2_dir/local_install`. If your image uses a different prefix, set `OOF2_PREFIX` to that location (for example, by adding `--env OOF2_PREFIX=/your/prefix` to the `singularity exec` line in `run.sh`).
+The OOF2 container must install OOF2 to `/oof2_dir/local_install`. In container mode, the MOOSE executable name is `combined-opt` unless you set `moose_exe` in `config.json`.
 
 ### Option B: Local Compilation
 If `cluster: false` is set in your config, you must compile MOOSE and OOF2 directly on your host machine.
@@ -133,14 +134,8 @@ conda activate moose
 cd /path/to/moose/modules/combined
 make -j 4
 ```
-This produces `combined-opt`. MicroHom needs the `heat_transfer` module in addition to `solid_mechanics`, so an executable built from `modules/solid_mechanics` alone is not sufficient. Check that your build contains the needed objects:
-```bash
-./combined-opt --registry | grep AnisoHeatConduction
-```
 
-*Rebuilding:* the combined app is a separate target, so you do not need to clean an existing `solid_mechanics` build before compiling it. A normal `make` is incremental. Clean only if you change the MOOSE commit or update the conda environment (`make clean` inside `modules/combined`; `make cleanall` there for a full rebuild of everything the app depends on), or if the compiler reports errors that look stale.
-
-By default the pipeline looks for `moose/modules/combined/combined-opt` inside the project. If your MOOSE is elsewhere, set `moose_app` in `config.json` (see Configuration).
+This produces the executable `combined-opt`. By default the pipeline looks for it at `moose/modules/combined/combined-opt` inside the project. If your MOOSE is elsewhere, set `moose_app` in `config.json` to the full path of the executable (see [Configuration](#configuration)).
 
 *Optional: a smaller custom app.* The `combined` app compiles every MOOSE module, which takes time and disk space. MicroHom only needs `solid_mechanics` and `heat_transfer`, so you can instead generate your own MOOSE app with just those two modules (for example with MOOSE's `stork` template; see the MOOSE documentation on creating an application). In the new app's `Makefile`, turn off `ALL_MODULES` and enable only the two modules:
 ```make
@@ -148,10 +143,10 @@ ALL_MODULES      := no
 SOLID_MECHANICS  := yes
 HEAT_TRANSFER    := yes
 ```
-Build it with `make -j 4` from the `moose` conda environment, then point MicroHom at the resulting executable with `moose_app` (local mode) or `moose_exe` (container mode, after adapting `moose.def` to build your app). Verify the build the same way as above, with `--registry | grep AnisoHeatConduction`, and run the example before relying on it.
+Build it with `make -j 4` from the `moose` conda environment, then point MicroHom at the resulting executable with `moose_app` (local mode) or `moose_exe` (container mode, after adapting `moose.def` to build your app). Run the example with the custom app to confirm it works before relying on it.
 
 **2. Compile OOF2 and OOFCanvas**
-Build **unmodified** OOF2 into `oof2_dir/local_install` using native system Python. No files need to be added to or edited in the OOF2 clone. *Ensure your Conda environment is deactivated before running CMake to prevent library conflicts.*
+Build **unmodified** OOF2 into `oof2_dir/local_install` (this exact location is required; the pipeline looks for OOF2 there) using native system Python. No files need to be added to or edited in the OOF2 clone. *Ensure your Conda environment is deactivated before running CMake to prevent library conflicts.*
 ```bash
 conda deactivate
 mkdir -p oof2_dir && cd oof2_dir
@@ -183,17 +178,6 @@ From the project root:
 ```
 If this prints `ok`, the meshing step can find OOF2.
 
-**4. (Optional) Install OOF2 elsewhere**
-`main/OOF_Env.py` looks for the OOF2 install prefix in this order:
-1. The `OOF2_PREFIX` environment variable
-2. `oof2_dir/local_install` inside this repository
-3. `/oof2_dir/local_install` (the container location)
-
-If you installed OOF2 somewhere else, export the prefix before running:
-```bash
-export OOF2_PREFIX=/path/to/your/oof2/install
-```
-
 #### Running the simulation step (local mode)
 OOF2 must run with conda **deactivated** (system Python), while MOOSE's `mpiexec` comes from the conda `moose` environment. In local mode, run the pipeline in two stages:
 
@@ -219,7 +203,23 @@ The simulation parameters and execution environments are centrally controlled vi
 *   `img` / `subimg`: Number of SVEs and sub-SVEs to homogenize sequentially.
 *   `BC`: Boundary condition type (e.g., `"trac"`, `"mixed"`, `"disp"`).
 *   `materials`: Define phase-specific properties (`E`, `nu`, `alpha`, `G`, etc.). For `"model"`, select material symmetry from `"iso"` (isotropic) or `"transverse"` (transversely isotropic).
-*   `mm_per_pixel`: Physical size of one image pixel in millimetres. Used by `--post` to report the physical width and height of each SVE.
+*   `pixel_size_um`: Physical size of one image pixel in micrometres. **Required**; set it from your image's scale bar. It is used consistently for meshing, post-processing (the physical SVE size) and image characterization.
+
+**Optional MOOSE settings** (omit them to use the defaults):
+*   `moose_app`: (local mode) path to the MOOSE executable. Use the full path to `combined-opt` (or your custom app); relative paths are interpreted from the project root. Default: `moose/modules/combined/combined-opt`. `example/example.json` sets this to the default location.
+*   `moose_exe`: (cluster mode) name of the executable inside `moose.sif`. Default: `combined-opt`.
+*   `mpiexec`: (local mode) path to the MPI launcher used for `--sim`. Default: the first `mpiexec` on your `PATH`. It must come from the same MPI that MOOSE was built with (MPICH for the conda `moose` environment).
+
+Example:
+```json
+"moose_app": "/home/you/projects/moose/modules/combined/combined-opt"
+```
+
+## Quick Start (Example)
+1. Copy the example configuration to the project root: `cp example/example.json config.json`.
+2. Check `cluster` in `config.json`: `false` if you compiled MOOSE and OOF2 locally, `true` if you built the `.sif` images. If MOOSE is not in `MicroHom/moose`, set `moose_app`.
+3. Run the pipeline as described in [Usage](#usage). In local mode this means the two stages from [Running the simulation step](#running-the-simulation-step-local-mode).
+4. Inspect the results in `RESULTS_linear/Res1x1/Volume_results.csv`.
 
 ## Usage
 Use the bash script wrapper (`run.sh`) to execute the pipeline. You can chain multiple steps together in a single command, subject to the environment notes above.
@@ -239,7 +239,7 @@ conda activate moose
 ```
 
 ## Output
-Results are written under the project root, in a folder per grid resolution (`Res<n>x<n>`):
+Results are written under the project root. Inside each folder below, results are grouped by grid resolution (`Res<n>x<n>`):
 
 | Folder | Contents |
 |---|---|
@@ -247,12 +247,21 @@ Results are written under the project root, in a folder per grid resolution (`Re
 | `RESULTS_linear/` | MOOSE inputs and outputs for each load case (`Img*/SubImg*/SVE*/`) and the summary file `Volume_results.csv` |
 | `RESULTS_CHAR/` | Sub-image characterization statistics (`--char`) |
 
-`Volume_results.csv` has one row per SVE with the 6×6 apparent stiffness matrix (columns `C11` through `C66`), the effective CTE components (`alpha_11_star`, `alpha_22_star`, `alpha_12_star`), phase volume fractions (`vf_i`, `vf_m`, `vf_v`), and the physical size of the SVE.
+`Volume_results.csv` has one row per SVE. Its notation follows: **T** = transverse (in-plane: 11, 22, 12), **L** = longitudinal (out-of-plane: 33), **S** = transverse shear (13, 23).
+
+| Columns | Meaning |
+|---|---|
+| `C11` … `C66` | Apparent stiffness **C\*** (6×6, row-major), Voigt order **(11, 22, 33, 13, 23, 12)** with engineering shear strains. Blocks: **C\*<sub>TT</sub>** = `C11, C12, C16, C22, C26, C66`; **c\*<sub>TL</sub>** = `C13, C23, C36`; **c\*<sub>LL</sub>** = `C33`; **C\*<sub>SS</sub>** = `C44, C45, C55` (ordered 13, 23). Entries that cannot couple for a z-symmetric (monoclinic) material are 0. |
+| `dtilde_Ttheta_11`, `_22`, `_12` | Adjusted transverse CTE **d̃\*<sub>Tθ</sub>** from the thermal load case. This is *not* the 3D transverse CTE; see the write-up for the relation. |
+| `xi_i`, `xi_m`, `xi_v` | Volume fractions ξ of the inclusion (white), matrix (grey) and void (black). |
+| `physical_width`, `physical_height` | Physical size of the SVE (in micrometres, from `pixel_size_um`). |
 
 ## Troubleshooting
-*   **`Could not find an OOF2 install`:** OOF2 was not installed to `oof2_dir/local_install`. Rebuild with the install prefix above or set `OOF2_PREFIX`.
+*   **`Could not find an OOF2 install`:** OOF2 was not installed to `oof2_dir/local_install`. Rebuild it with the commands in Option B, step 2, which install into that directory.
 *   **`import oof2` fails or Python-version errors:** OOF2 was built against a different Python than the one launching the pipeline. Rebuild OOF2 with `/usr/bin/python3` (or edit the interpreter in `run.sh`).
 *   **Shared-library errors (e.g. OOFCanvas):** add the install's `lib`/`lib64` directory to `LD_LIBRARY_PATH`.
 *   **Meshing appears to succeed but no `Micro.inp` is written:** check `oof2_processing.log` in the results directory; errors in the mesh generator are logged there rather than raised.
 *   **`'AnisoHeatConduction' is not a registered object`:** the MOOSE executable was built without the `heat_transfer` module (for example from `modules/solid_mechanics` only). Build and use the `combined` app (`combined-opt`), or rebuild `moose.sif` from the current `moose.def`.
+*   **`MOOSE executable not found`:** the path in `moose_app` is wrong, or `combined-opt` has not been built. Build `modules/combined` (see Option B) or correct the path in `config.json`.
+*   **A simulation case reports `FAILED (exit code ...)`:** the MOOSE run for that load case aborted; the failed cases are listed at the end of `--sim`. Look at the MOOSE error printed above that message.
 *   **MPI errors such as `Runtime environment uses unsupported PMI version PMIx` (each case "finishes" in under a second):** the `mpiexec` being used belongs to a different MPI (e.g. OpenMPI) than the one MOOSE was built with (MPICH). Activate the conda `moose` environment before `--sim`, or set `mpiexec` in `config.json`.
