@@ -16,6 +16,11 @@ Notation follows the write-up "Transverse Isotropy, thermomechanical response":
   a^j_TL             eps_L concentration (2-phase closed form)                          (32b)
   d~*_Ttheta         adjusted transverse CTE from the thermal LC                        (22a)
   d~*_TL             -D~*_TT c*_TL                                                      (27b)
+  E_L*               c*_LT . d~*_TL + c*_LL  (= EL*)                                     (27e)
+  c*_Ltheta          <sigma_L>/dtheta from the thermal LC (eps_T=0, eps_L=0)             (18b)
+  d~*_Ltheta         c*_LT . d~*_Ttheta + c*_Ltheta                                      (27f)
+  d_L*               -d~*_Ltheta / E_L*     (homogenized longitudinal CTE)          (23f)/(27f)
+  d_T*               d~*_Ttheta + d_L* * d~*_TL  (homogenized transverse CTE vec)        (23c)
   xi^j               volume fraction of phase j: i = inclusion (white), m = matrix (grey),
                      v = void (black)
   Sigma, E           3x3 matrices whose columns are the volume-averaged stress / strain of
@@ -274,10 +279,7 @@ class Post_Process_Thermal:
                 ip.C_i, ip.C_m)
 
     @staticmethod
-    def _compute_analytical_2p(xi_i, C_TT_i, C_TT_m, C_TT_star, c_TL_i, c_TL_m, c_LL_i, c_LL_m, D_TT_star):
-        """2-phase closed forms (xi_m = 1 - xi_i): A^j_TT (32a), a^j_TL (32b), c*_TL (26b),
-        d~*_TL (27b) and c*_LL (26d)."""
-        xi_m = 1.0 - xi_i
+    def _compute_analytical_2p(xi_i, xi_m, C_TT_i, C_TT_m, C_TT_star, c_TL_i, c_TL_m, c_LL_i, c_LL_m, D_tilde_TT_star):
         I3 = np.eye(3)
 
         if xi_i > 0.0:
@@ -287,7 +289,7 @@ class Post_Process_Thermal:
         A_TT_m = (I3 - xi_i * A_TT_i) / xi_m if xi_m > 0 else np.zeros_like(C_TT_m)
 
         c_TL_star = xi_i * (A_TT_i.T @ c_TL_i) + xi_m * (A_TT_m.T @ c_TL_m)
-        d_TL_star = -D_TT_star @ c_TL_star
+        d_tilde_TL_star = -D_tilde_TT_star @ c_TL_star
 
         a_TL_i = (A_TT_i - I3) @ np.linalg.inv(C_TT_i - C_TT_m) @ (c_TL_i - c_TL_m)
         a_TL_m = -(xi_i / xi_m) * a_TL_i if xi_m > 0 else np.zeros(3)
@@ -295,16 +297,15 @@ class Post_Process_Thermal:
         c_LL_voigt = xi_i * c_LL_i + xi_m * c_LL_m
         c_LL_star = c_LL_voigt + xi_i * (c_TL_i @ a_TL_i) + xi_m * (c_TL_m @ a_TL_m)
 
-        return c_TL_star, d_TL_star, a_TL_i, a_TL_m, c_LL_star
+        return c_TL_star, d_tilde_TL_star, a_TL_i, a_TL_m, c_LL_star
 
     def run(self):
         C_TT_star, Sigma_avg, E_avg, Sigma_i, Sigma_m, E_i, E_m, C_i, C_m = self._InPlane_data()
-        D_TT_star = np.linalg.inv(C_TT_star)          # D~*_TT
+        D_tilde_TT_star = np.linalg.inv(C_TT_star)
 
         trow = self._read_last_row(self.thermal_results_csv)
         lrow = self._read_last_row(self.linear_results_csv)
 
-        # LC 4 (thermal, real CTE): volume-averaged transverse stress and strain, global and per phase
         sigma_T_LC4 = np.array([float(trow.get("Global_S11", 0.0)),
                                 float(trow.get("Global_S22", 0.0)),
                                 float(trow.get("Global_S12", 0.0))])
@@ -318,6 +319,8 @@ class Post_Process_Thermal:
                                 float(trow.get("Matrix_E22", 0.0)),
                                 float(trow.get("Matrix_E12", 0.0))])
 
+        sigma_L_LC4 = float(trow.get("Global_S33", 0.0))
+
         vol_white = float(lrow.get("volume_white", 0.0))
         vol_grey = float(lrow.get("volume_grey", 0.0))
         vol_black = float(lrow.get("volume_black", 0.0))
@@ -330,49 +333,61 @@ class Post_Process_Thermal:
         else:
             xi_i = xi_m = xi_v = 0.0
 
-        # d~*_Ttheta = (<eps_T> - D~*_TT <sigma_T>) / dtheta     (22a with eps_L = 0)
-        d_tilde_Ttheta_star = (eps_T_LC4 - (D_TT_star @ sigma_T_LC4)) / self.delta_theta
+        d_tilde_Ttheta_star = (eps_T_LC4 - (D_tilde_TT_star @ sigma_T_LC4)) / self.delta_theta
 
-        T = [0, 1, 5]    # transverse indices (11, 22, 12) in the 6x6 Voigt order
+        T = [0, 1, 5]
         C_TT_i = C_i[np.ix_(T, T)]
         C_TT_m = C_m[np.ix_(T, T)]
 
-        c_TL_i = C_i[T, 2]       # [C13, C23, C36] of the inclusion
+        c_TL_i = C_i[T, 2]
         c_TL_m = C_m[T, 2]
-        c_LL_i = C_i[2, 2]       # C33
+        c_LL_i = C_i[2, 2]
         c_LL_m = C_m[2, 2]
 
-        A_TT_i = E_i @ np.linalg.inv(E_avg)      # (34a)
+        A_TT_i = E_i @ np.linalg.inv(E_avg)
         A_TT_m = E_m @ np.linalg.inv(E_avg)
 
-        # c*_TL = sum_j xi^j (A^j_TT)^T c^j_TL     (26b). Sum over the phases with xi^j (void: c_TL ~ 0)
         c_TL_star = xi_i * (A_TT_i.T @ c_TL_i) + xi_m * (A_TT_m.T @ c_TL_m)
-        d_TL_star = -D_TT_star @ c_TL_star       # (27b)
+        d_tilde_TL_star = -D_tilde_TT_star @ c_TL_star
 
-        # a^j_Ttheta from the thermal LC     (35a)
         a_Ttheta_i = (eps_T_i_LC4 - (A_TT_i @ eps_T_LC4)) / self.delta_theta
         a_Ttheta_m = (eps_T_m_LC4 - (A_TT_m @ eps_T_LC4)) / self.delta_theta
 
-        c_TL_star_2p, d_TL_star_2p, a_TL_i_2p, a_TL_m_2p, c_LL_star_2p = self._compute_analytical_2p(
-            xi_i, C_TT_i, C_TT_m, C_TT_star, c_TL_i, c_TL_m, c_LL_i, c_LL_m, D_TT_star
+        c_TL_star_2p, d_tilde_TL_star_2p, a_TL_i_2p, a_TL_m_2p, c_LL_star_2p = self._compute_analytical_2p(
+            xi_i, xi_m, C_TT_i, C_TT_m, C_TT_star, c_TL_i, c_TL_m, c_LL_i, c_LL_m, D_tilde_TT_star
         )
 
         c_LL_star = float(c_LL_star_2p)
+
+        E_L_star = float(c_TL_star @ d_tilde_TL_star + c_LL_star)
+
+        c_Ltheta_star = sigma_L_LC4 / self.delta_theta
+
+        d_tilde_Ltheta_star = float(c_TL_star @ d_tilde_Ttheta_star + c_Ltheta_star)
+
+        d_L_star = -d_tilde_Ltheta_star / E_L_star if E_L_star != 0 else np.nan
+
+        d_T_star = d_tilde_Ttheta_star + d_L_star * d_tilde_TL_star
 
         return {
             # homogenized out-of-plane coupling (go into the 6x6 matrix)
             "c_TL_star": c_TL_star,                      # [C13, C23, C36]
             "c_LL_star": c_LL_star,                      # C33
             # diagnostics: numeric (from simulations) vs. 2-phase closed form
-            "d_TL_star_11": float(d_TL_star[0]),
+            "d_tilde_TL_star_11": float(d_tilde_TL_star[0]),
             "a_Ttheta_i_11": float(a_Ttheta_i[0]),
             "a_Ttheta_m_11": float(a_Ttheta_m[0]),
             "c_TL_star_2p_11": float(c_TL_star_2p[0]),
-            "d_TL_star_2p_11": float(d_TL_star_2p[0]),
+            "d_tilde_TL_star_2p_11": float(d_tilde_TL_star_2p[0]),
             "xi_i": xi_i,
             "xi_m": xi_m,
             "xi_v": xi_v,
             "d_tilde_Ttheta_star": d_tilde_Ttheta_star,  # [11, 22, 12]
+            "E_L_star": E_L_star,
+            "c_Ltheta_star": c_Ltheta_star,
+            "d_tilde_Ltheta_star": d_tilde_Ltheta_star,
+            "d_L_star": d_L_star,
+            "d_T_star": d_T_star,                        # [11, 22, 12]
         }
 
 
@@ -476,10 +491,15 @@ class Post_Process_Sigma:
                 phys_width, phys_height = self.get_physical_dimensions(i, j, self.pixel_size_um)
 
                 d_tilde = thermal_results["d_tilde_Ttheta_star"]
+                d_T_star = thermal_results["d_T_star"]
                 extra_vars = [
                     float(d_tilde[0]),
                     float(d_tilde[1]),
                     float(d_tilde[2]),
+                    float(d_T_star[0]),
+                    float(d_T_star[1]),
+                    float(d_T_star[2]),
+                    float(thermal_results["d_L_star"]),
                     thermal_results["xi_i"],
                     thermal_results["xi_m"],
                     thermal_results["xi_v"],
@@ -493,7 +513,8 @@ class Post_Process_Sigma:
         headers = (
             ["Img", "SubImg"] +
             [f"C{r+1}{c+1}" for r in range(6) for c in range(6)] +      # C*_ab, Voigt order 11,22,33,13,23,12
-            ["dtilde_Ttheta_11", "dtilde_Ttheta_22", "dtilde_Ttheta_12",
+            ["d_tilde_Ttheta_11", "d_tilde_Ttheta_22", "d_tilde_Ttheta_12",
+             "d_T_star_11", "d_T_star_22", "d_T_star_12", "d_L_star",
              "xi_i", "xi_m", "xi_v", "physical_width", "physical_height"]
         )
         with open(csv_file, "w", newline="") as f:

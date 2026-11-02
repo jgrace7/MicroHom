@@ -44,7 +44,6 @@ MicroHom/
 ├── main/ 
 │   ├── main.py                     # pipeline driver
 │   ├── ImageExtract.py             # image extractor and thresholder
-│   ├── mean_stiffness_matrix.py    # mean apparent stiffness calculator
 │   ├── subimagecharacterization.py # image characterization
 │   ├── OOF_Env.py                  # locates the OOF2 install and sets up sys.path
 │   ├── run_oof2.py                 # starts OOF2 and calls the mesh generator
@@ -203,7 +202,7 @@ The simulation parameters and execution environments are centrally controlled vi
 *   `img` / `subimg`: Number of SVEs and sub-SVEs to homogenize sequentially.
 *   `BC`: Boundary condition type (e.g., `"trac"`, `"mixed"`, `"disp"`).
 *   `materials`: Define phase-specific properties (`E`, `nu`, `alpha`, `G`, etc.). For `"model"`, select material symmetry from `"iso"` (isotropic) or `"transverse"` (transversely isotropic).
-*   `pixel_size_um`: Physical size of one image pixel in micrometres. **Required**; set it from your image's scale bar. It is used consistently for meshing, post-processing (the physical SVE size) and image characterization.
+*   `pixel_size_um`: Physical size of one image pixel in micrometres. **Required**; set it from your image's scale bar. It is for meshing, post-processing, and image characterization.
 
 **Optional MOOSE settings** (omit them to use the defaults):
 *   `moose_app`: (local mode) path to the MOOSE executable. Use the full path to `combined-opt` (or your custom app); relative paths are interpreted from the project root. Default: `moose/modules/combined/combined-opt`. `example/example.json` sets this to the default location.
@@ -251,10 +250,11 @@ Results are written under the project root. Inside each folder below, results ar
 
 | Columns | Meaning |
 |---|---|
-| `C11` … `C66` | Apparent stiffness **C\*** (6×6, row-major), Voigt order **(11, 22, 33, 13, 23, 12)** with engineering shear strains. Blocks: **C\*<sub>TT</sub>** = `C11, C12, C16, C22, C26, C66`; **c\*<sub>TL</sub>** = `C13, C23, C36`; **c\*<sub>LL</sub>** = `C33`; **C\*<sub>SS</sub>** = `C44, C45, C55` (ordered 13, 23). Entries that cannot couple for a z-symmetric (monoclinic) material are 0. |
-| `dtilde_Ttheta_11`, `_22`, `_12` | Adjusted transverse CTE **d̃\*<sub>Tθ</sub>** from the thermal load case. This is *not* the 3D transverse CTE; see the write-up for the relation. |
+| `C11` … `C66` | Apparent stiffness **C\*** components. Blocks: **C\*<sub>TT</sub>** = `C11, C12, C16, C22, C26, C66`; **c\*<sub>TL</sub>** = `C13, C23, C36`; **c\*<sub>LL</sub>** = `C33`; **C\*<sub>SS</sub>** = `C44, C45, C55` (ordered 13, 23). Entries that cannot couple for a z-symmetric (monoclinic) material are 0. |
+| `d_tilde_Ttheta_11`, `_22`, `_12` | Adjusted transverse CTE **d̃\*<sub>Tθ</sub>** from the thermal load case. This is *not* the 3D transverse CTE.|
+| `d_T_star_11`, `_22`, `_12`, `d_L_star` | 3D CTE: transverse **d\*<sub>T</sub>** = [d11, d22, d12] and longitudinal **d\*<sub>L</sub>** = d33. |
 | `xi_i`, `xi_m`, `xi_v` | Volume fractions ξ of the inclusion (white), matrix (grey) and void (black). |
-| `physical_width`, `physical_height` | Physical size of the SVE (in micrometres, from `pixel_size_um`). |
+| `physical_width`, `physical_height` | Physical size of the SVE in micrometers (from `pixel_size_um`). |
 
 ## Troubleshooting
 *   **`Could not find an OOF2 install`:** OOF2 was not installed to `oof2_dir/local_install`. Rebuild it with the commands in Option B, step 2, which install into that directory.
